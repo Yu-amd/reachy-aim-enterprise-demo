@@ -1,4 +1,4 @@
-# Reachy Mini Lite + AIM (OpenAI-compatible) Enterprise Demo
+# Reachy Mini Lite + AMD Inference Microservice (AIM) Enterprise Demo
 
 This repo provides a **fully functional** enterprise demo that connects a Reachy Mini robot to an AIM (OpenAI-compatible) endpoint. You can run it **without the physical robot** using the Reachy Mini daemon simulation, while targeting a real **AIM OpenAI-compatible endpoint** (e.g., running on MI300X in your datacenter).
 
