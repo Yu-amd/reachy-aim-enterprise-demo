@@ -7,9 +7,10 @@ This repo provides a **fully functional** enterprise demo that connects a Reachy
 - **Reachy Mini integration** via daemon URL (simulation-friendly, ready for hardware)
 - **Helm chart** (`helm/reachy-demo-addons`) for cluster-side demo add-ons:
   - Load generator CronJob (triggerable as a Job)
-  - Optional Ingress (disabled by default)
   - Grafana dashboard JSON shipped as a ConfigMap
   - Optional dependency wiring for `kube-prometheus-stack` (disabled by default)
+  
+  **Note:** This chart is for add-ons only (loadgen, dashboards). It does not deploy the AIM endpoint itself. Configure `aim.baseUrl` to point to your existing AIM service.
 
 ## Prerequisites
 
@@ -105,7 +106,7 @@ If you already have an AIM endpoint running (e.g., in Kubernetes, cloud service,
 ### Step 3: Configure environment variables
 
 ```bash
-# Copy the example environment file
+# Copy the example environment file (never commit .env to git!)
 cp .env.example .env
 
 # Edit .env and set your AIM endpoint URL
@@ -113,6 +114,8 @@ cp .env.example .env
 # Example: AIM_BASE_URL=http://127.0.0.1:8000
 # Or: AIM_BASE_URL=https://your-aim-endpoint.example.com
 ```
+
+**Important:** Never commit `.env` to git. It may contain secrets (API keys, endpoints, etc.). Only `.env.example` should be tracked.
 
 **Edit `.env` file:**
 - Set `AIM_BASE_URL` (required) - your AIM endpoint URL
@@ -319,7 +322,7 @@ python -c "from reachy_demo.aim.client import AIMClient; from reachy_demo.orches
 ## Cluster Deployment via Helm
 
 This Helm chart is **not for installing a Kubernetes cluster** on your host.
-It installs **demo add-ons in your existing Kubernetes cluster** (loadgen, optional ingress, dashboard configmap).
+It installs **demo add-ons in your existing Kubernetes cluster** (loadgen, dashboard configmap).
 
 ### Prerequisites
 

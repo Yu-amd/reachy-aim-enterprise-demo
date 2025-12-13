@@ -1,17 +1,9 @@
 aim:
+  # baseUrl is used by the loadgen container to connect to AIM endpoint
+  # This can be a Service URL (cluster-internal) or external URL
   baseUrl: "http://aim.default.svc.cluster.local:8000"
   chatPath: "/v1/chat/completions"
   model: "llm-prod"
-
-ingress:
-  enabled: false
-  className: nginx
-  host: aim-demo.example.com
-  tls:
-    enabled: false
-    secretName: aim-demo-tls
-  path: /
-  pathType: Prefix
 
 monitoring:
   enabled: true
