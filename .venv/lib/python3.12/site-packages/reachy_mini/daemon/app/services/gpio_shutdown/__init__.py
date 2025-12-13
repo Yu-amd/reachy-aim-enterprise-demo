@@ -1,1 +1,0 @@
-"""GPIO shutdown service package."""
