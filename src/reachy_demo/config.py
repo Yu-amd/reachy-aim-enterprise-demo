@@ -32,7 +32,7 @@ class Settings:
     aim_max_retries: int = 1
 
     # Reachy Mini daemon
-    reachy_daemon_url: str = "http://127.0.0.1:8000"
+    reachy_daemon_url: str = "http://127.0.0.1:8001"  # Default 8001 to avoid AIM port conflicts
     robot_mode: str = "sim"  # sim|hardware
 
     # SLO + metrics
@@ -51,7 +51,7 @@ def load_settings() -> Settings:
         aim_api_key=_env("AIM_API_KEY", None),
         aim_timeout_ms=_env_int("AIM_TIMEOUT_MS", 2200),
         aim_max_retries=_env_int("AIM_MAX_RETRIES", 1),
-        reachy_daemon_url=_env("REACHY_DAEMON_URL", "http://127.0.0.1:8000") or "http://127.0.0.1:8000",
+        reachy_daemon_url=_env("REACHY_DAEMON_URL", "http://127.0.0.1:8001") or "http://127.0.0.1:8001",
         robot_mode=_env("ROBOT_MODE", "sim") or "sim",
         e2e_slo_ms=_env_int("E2E_SLO_MS", 2500),
         metrics_host=_env("EDGE_METRICS_HOST", "127.0.0.1") or "127.0.0.1",

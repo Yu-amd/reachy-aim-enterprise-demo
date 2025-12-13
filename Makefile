@@ -8,9 +8,9 @@ venv:
 install: venv
 	. .venv/bin/activate && pip install -U pip && pip install -e .
 
-# Run Reachy Mini daemon in simulation mode
+# Run Reachy Mini daemon in simulation mode (port 8001 to avoid AIM port conflicts)
 sim:
-	. .venv/bin/activate && pip install "reachy-mini[mujoco]" && reachy-mini-daemon --sim --headless
+	. .venv/bin/activate && pip install "reachy-mini[mujoco]" && reachy-mini-daemon --sim --headless --fastapi-port 8001
 
 # Run the interactive edge demo
 run:

@@ -2,7 +2,67 @@
 
 This repo provides a **fully functional** enterprise demo that connects a Reachy Mini robot to an AIM (OpenAI-compatible) endpoint. You can run it **without the physical robot** using the Reachy Mini daemon simulation, while targeting a real **AIM OpenAI-compatible endpoint** (e.g., running on MI300X in your datacenter).
 
+## Architecture (Edge + Cluster)
+
+```
+Strix Halo Host (Edge)
+  ├── reachy-mini-daemon (sim now / hardware later)
+  └── reachy-demo client (this repo)
+        │
+        └── HTTP requests
+             │
+             v
+AIM Endpoint (OpenAI-compatible) on MI300X (Cluster)
+```
+
+**Data Flow:**
+1. User types prompt → Edge client (`reachy-demo`)
+2. Edge client → AIM endpoint (LLM inference)
+3. AIM response → Edge client
+4. Edge client → Reachy daemon (gestures + TTS)
+5. Robot performs gesture and speaks response
+
+## Demo Modes
+
+### Mode A (Recommended): Remote AIM Endpoint
+- **AIM runs in your cluster** (MI300X datacenter)
+- Edge client points to `AIM_BASE_URL` (e.g., via SSH port forward or ingress)
+- Reachy daemon runs locally on edge host (sim or hardware)
+- **Use case:** Production-like setup, real inference hardware
+
+### Mode B: Local AIM Endpoint
+- **AIM runs on the same host** as edge client (Docker/local)
+- Both AIM and daemon need different ports (AIM: 8000, daemon: 8001)
+- **Use case:** Development, testing without cluster access
+
+### Mode C: Offline Stub (Future)
+- Run without AIM; prints canned responses
+- Useful for robot-only testing
+
+## Golden Path (No Robot Required)
+
+**Recommended setup** - avoids port conflicts:
+
+```bash
+# Setup (one time)
+make install
+cp .env.example .env
+# Edit .env: Set AIM_BASE_URL to your AIM endpoint
+
+# Terminal 1: Start Reachy daemon on port 8001 (avoids AIM port conflicts)
+make sim
+
+# Terminal 2: Run the demo
+make run
+```
+
+The `make sim` command automatically runs the daemon on port 8001, and `.env.example` is pre-configured to use `REACHY_DAEMON_URL=http://127.0.0.1:8001`.
+
+**Why port 8001?** Both AIM and Reachy daemon default to port 8000. Using 8001 for the daemon avoids conflicts when AIM is on 8000 (common with SSH port forwarding).
+
 ## Quick Start (One Command Per Terminal)
+
+Same as the [Golden Path](#golden-path-no-robot-required) above:
 
 ```bash
 # Setup (one time)
@@ -10,7 +70,7 @@ make install
 cp .env.example .env
 # Edit .env and set AIM_BASE_URL to your AIM endpoint
 
-# Terminal 1: Start Reachy daemon simulation
+# Terminal 1: Start Reachy daemon simulation (port 8001)
 make sim
 
 # Terminal 2: Run the demo
@@ -157,9 +217,8 @@ cp .env.example .env
   - For remote endpoint: `https://<your-ingress-host>`
   - For Kubernetes port-forward: `http://127.0.0.1:8000`
 - Set `REACHY_DAEMON_URL` - Reachy daemon URL
-  - Default: `http://127.0.0.1:8000`
-  - **If port 8000 is used for AIM (SSH forward), use a different port:** `http://127.0.0.1:8001`
-  - Then run daemon with: `reachy-mini-daemon --sim --headless --fastapi-port 8001`
+  - **Default (recommended):** `http://127.0.0.1:8001` (avoids AIM port conflicts)
+  - If you need port 8000, set to `http://127.0.0.1:8000` and ensure AIM uses a different port
 - (Optional) Adjust `AIM_MODEL` if different from `llm-prod`
 - (Optional) Set `AIM_API_KEY` if your endpoint requires authentication
 
@@ -343,6 +402,14 @@ python -c "from reachy_demo.aim.client import AIMClient; from reachy_demo.orches
 4. **Verify metrics** (Step 6 above)
 
 ### Troubleshooting
+
+**Issue: Port conflicts (both AIM and daemon on port 8000)**
+- **Problem:** Both AIM endpoint and Reachy daemon default to port 8000
+- **Solution:** Use the golden path configuration:
+  - Daemon on port 8001: `make sim` (automatically uses `--fastapi-port 8001`)
+  - `.env.example` is pre-configured with `REACHY_DAEMON_URL=http://127.0.0.1:8001`
+  - AIM endpoint stays on port 8000 (or your configured port)
+- **Manual override:** If you need different ports, update `REACHY_DAEMON_URL` in `.env` and run daemon with matching `--fastapi-port`
 
 **Issue: "AIM_BASE_URL is required"**
 - Solution: Make sure you've created `.env` from `.env.example` and set `AIM_BASE_URL`
@@ -539,7 +606,7 @@ reachy-aim-enterprise-demo/
 | `AIM_API_KEY` | No | - | API key for authentication |
 | `AIM_TIMEOUT_MS` | No | `2200` | Request timeout in milliseconds (increase if getting timeout errors, e.g., `30000` for 30 seconds) |
 | `AIM_MAX_RETRIES` | No | `1` | Maximum retry attempts |
-| `REACHY_DAEMON_URL` | No | `http://127.0.0.1:8000` | Reachy Mini daemon URL |
+| `REACHY_DAEMON_URL` | No | `http://127.0.0.1:8001` | Reachy Mini daemon URL (default 8001 to avoid AIM port conflicts) |
 | `ROBOT_MODE` | No | `sim` | Robot mode: `sim` or `hardware` |
 | `E2E_SLO_MS` | No | `2500` | End-to-end SLO in milliseconds |
 | `EDGE_METRICS_HOST` | No | `127.0.0.1` | Metrics server host |
