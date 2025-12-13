@@ -3,8 +3,19 @@ from __future__ import annotations
 import requests
 import time
 import random
-from typing import Dict, Any
+import logging
+from typing import Dict, Any, Optional
 from .robot_base import RobotAdapter
+
+logger = logging.getLogger(__name__)
+
+# Try to import pyttsx3 for fallback TTS
+try:
+    import pyttsx3
+    PYTTSX3_AVAILABLE = True
+except ImportError:
+    PYTTSX3_AVAILABLE = False
+    pyttsx3 = None
 
 class ReachyDaemonREST(RobotAdapter):
     """REST adapter against reachy-mini-daemon.
@@ -15,6 +26,11 @@ class ReachyDaemonREST(RobotAdapter):
 
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
+        self._startup_logged = False
+        self._tts_method: Optional[str] = None  # "daemon" or "system" or None
+        self._tts_engine = None
+        self._tts_checked = False
+        self._tts_daemon_endpoint: Optional[str] = None
 
     def _get(self, path: str) -> requests.Response:
         return requests.get(f"{self.base_url}{path}", timeout=1.0)
@@ -24,9 +40,65 @@ class ReachyDaemonREST(RobotAdapter):
 
     def health(self) -> bool:
         try:
-            return self._get("/api/state/full").status_code == 200
+            is_healthy = self._get("/api/state/full").status_code == 200
+            if not self._startup_logged:
+                if is_healthy:
+                    # Check TTS availability
+                    self._check_tts_availability()
+                    tts_status = f"TTS: {self._tts_method}" if self._tts_method else "TTS: unavailable"
+                    logger.info(f"✓ Reachy daemon connected at {self.base_url} - robot gestures fully functional, {tts_status}")
+                else:
+                    logger.warning(f"⚠ Reachy daemon not reachable at {self.base_url} - gestures will be attempted but may fail")
+                self._startup_logged = True
+            return is_healthy
         except Exception:
+            if not self._startup_logged:
+                logger.warning(f"⚠ Reachy daemon not reachable at {self.base_url} - gestures will be attempted but may fail")
+                self._startup_logged = True
             return False
+    
+    def _check_tts_availability(self) -> None:
+        """Check which TTS method is available: daemon API first, then system TTS."""
+        if self._tts_checked:
+            return
+        
+        self._tts_checked = True
+        
+        # Try daemon API endpoints (common patterns)
+        daemon_endpoints = [
+            "/api/speak",
+            "/api/tts",
+            "/api/audio/speak",
+            "/api/audio/tts",
+        ]
+        
+        for endpoint in daemon_endpoints:
+            try:
+                # Try a HEAD or GET request to check if endpoint exists
+                # Some APIs might require POST, so we'll try a minimal POST too
+                test_response = self._post(endpoint, json={"text": "test"})
+                if test_response.status_code in [200, 201, 202, 204]:
+                    self._tts_method = "daemon"
+                    self._tts_daemon_endpoint = endpoint
+                    logger.info(f"✓ TTS: Using Reachy daemon API ({endpoint})")
+                    return
+            except Exception:
+                continue
+        
+        # Fall back to system TTS (pyttsx3)
+        if PYTTSX3_AVAILABLE:
+            try:
+                self._tts_engine = pyttsx3.init()
+                self._tts_engine.setProperty('rate', 150)  # Speed (words per minute)
+                self._tts_engine.setProperty('volume', 0.8)  # Volume (0.0 to 1.0)
+                self._tts_method = "system"
+                logger.info("✓ TTS: Using system TTS (pyttsx3) - daemon API not available")
+            except Exception as e:
+                logger.warning(f"⚠ TTS: System TTS initialization failed: {e}")
+                self._tts_method = None
+        else:
+            logger.warning("⚠ TTS: pyttsx3 not available. Install with: pip install pyttsx3")
+            self._tts_method = None
 
     def get_state(self) -> Dict[str, Any]:
         r = self._get("/api/state/full")
@@ -36,7 +108,7 @@ class ReachyDaemonREST(RobotAdapter):
     def gesture(self, name: str) -> None:
         """Execute a robot gesture.
         
-        Supported gestures:
+        Fully implemented gestures (work in sim and hardware mode):
         - "nod": Simple head nod (pitch down then back up)
         - "excited": Antennas wiggle with head bobs (energetic response)
         - "thinking": Head tilts side to side (processing/thinking)
@@ -47,6 +119,7 @@ class ReachyDaemonREST(RobotAdapter):
         - "wake_up": Wake up animation
         - "goto_sleep": Sleep animation
         """
+        logger.debug(f"🤖 Gesture (implemented): {name}")
         try:
             if name == "nod":
                 self._nod_gesture()
@@ -314,13 +387,61 @@ class ReachyDaemonREST(RobotAdapter):
             pass
 
     def speak(self, text: str) -> None:
-        """Speak text (placeholder - TTS not implemented).
+        """Speak text using available TTS method.
         
-        For now, this is a no-op. In the future, this could:
-        - Use robot's built-in TTS if available
-        - Use system TTS (e.g., espeak, festival)
-        - Send audio to robot speakers
+        Priority:
+        1. Reachy daemon API (if available) - uses robot's built-in audio
+        2. System TTS (pyttsx3) - fallback for offline TTS
+        
+        The method is automatically detected at startup.
         """
-        # TODO: Implement TTS integration
-        # For now, just a placeholder
-        pass
+        if not text or not text.strip():
+            return
+        
+        # Check TTS availability if not already checked
+        if not self._tts_checked:
+            self._check_tts_availability()
+        
+        if self._tts_method == "daemon":
+            self._speak_via_daemon(text)
+        elif self._tts_method == "system":
+            self._speak_via_system(text)
+        else:
+            logger.debug(f"🔊 TTS unavailable: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+    
+    def _speak_via_daemon(self, text: str) -> None:
+        """Speak text via Reachy daemon API."""
+        try:
+            logger.debug(f"🔊 Speaking via daemon: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+            response = self._post(
+                self._tts_daemon_endpoint,
+                json={"text": text}
+            )
+            response.raise_for_status()
+        except Exception as e:
+            logger.warning(f"⚠ Daemon TTS error, falling back to system TTS: {e}")
+            # Fall back to system TTS if daemon fails
+            if PYTTSX3_AVAILABLE and self._tts_engine is None:
+                try:
+                    self._tts_engine = pyttsx3.init()
+                    self._tts_engine.setProperty('rate', 150)
+                    self._tts_engine.setProperty('volume', 0.8)
+                except Exception:
+                    pass
+            if self._tts_engine is not None:
+                self._speak_via_system(text)
+            else:
+                logger.error("⚠ TTS failed: daemon error and system TTS not available")
+    
+    def _speak_via_system(self, text: str) -> None:
+        """Speak text via system TTS (pyttsx3)."""
+        if self._tts_engine is None:
+            logger.debug(f"🔊 System TTS unavailable: '{text[:50]}...'")
+            return
+        
+        try:
+            logger.debug(f"🔊 Speaking via system TTS: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+            self._tts_engine.say(text)
+            self._tts_engine.runAndWait()
+        except Exception as e:
+            logger.warning(f"⚠ System TTS error: {e}")

@@ -12,6 +12,7 @@ dependencies = [
   "rich>=13.7.1",
   "pydantic>=2.7.0",
   "prometheus-client>=0.20.0",
+  "pyttsx3>=2.90",
 ]
 
 [project.scripts]

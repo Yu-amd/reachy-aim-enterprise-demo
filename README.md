@@ -2,6 +2,35 @@
 
 This repo provides a **fully functional** enterprise demo that connects a Reachy Mini robot to an AIM (OpenAI-compatible) endpoint. You can run it **without the physical robot** using the Reachy Mini daemon simulation, while targeting a real **AIM OpenAI-compatible endpoint** (e.g., running on MI300X in your datacenter).
 
+## Quick Start (One Command Per Terminal)
+
+```bash
+# Setup (one time)
+make install
+cp .env.example .env
+# Edit .env and set AIM_BASE_URL to your AIM endpoint
+
+# Terminal 1: Start Reachy daemon simulation
+make sim
+
+# Terminal 2: Run the demo
+make run
+```
+
+That's it! The demo will connect to your AIM endpoint and control the simulated robot.
+
+**Note:** `make install` automatically creates the virtual environment and installs dependencies. If you prefer to do it separately: `make venv` then `make install`.
+
+## Demo Narrative
+
+This demo showcases an **enterprise edge-to-cloud AI architecture**:
+
+- **Reachy Mini** is the edge client (I/O interface) - handles user interaction and robot control
+- **AIM (AMD Inference Microservice)** is the inference API (OpenAI-compatible) - runs LLM inference in your datacenter
+- **Kubernetes add-ons** provide repeatability - load generator and Grafana dashboards for monitoring
+
+The architecture separates concerns: edge handles I/O and latency-sensitive robot control, while cloud handles compute-intensive LLM inference. This enables real-time robot interactions powered by large language models.
+
 ## What you get
 - **Edge client** (runs on your Strix Halo host): CLI orchestrator + AIM client + Prometheus metrics
 - **Reachy Mini integration** via daemon URL (simulation-friendly, ready for hardware)
@@ -19,6 +48,10 @@ This repo provides a **fully functional** enterprise demo that connects a Reachy
 - Access to an AIM (OpenAI-compatible) endpoint
 - (Optional) `helm` for Kubernetes deployment
 - (Optional) `reachy-mini[mujoco]` for local simulation testing
+- (Optional) System TTS backend for speech (automatically installed with Python dependencies):
+  - **Linux**: `espeak` or `espeak-ng` (usually pre-installed, or `sudo apt-get install espeak`)
+  - **macOS**: Built-in TTS (no additional install needed)
+  - **Windows**: SAPI5 (built-in, no additional install needed)
 
 ## Quick Start Guide
 
@@ -141,15 +174,16 @@ source .venv/bin/activate
 # Install reachy-mini with mujoco support
 pip install "reachy-mini[mujoco]"
 
-# Install PortAudio system library (required for audio backend)
+# Install system libraries (if needed)
 # On Ubuntu/Debian:
-sudo apt-get update && sudo apt-get install -y portaudio19-dev
+sudo apt-get update && sudo apt-get install -y portaudio19-dev espeak
 
 # On Fedora/RHEL:
-# sudo dnf install portaudio-devel
+# sudo dnf install portaudio-devel espeak
 
 # On macOS (using Homebrew):
 # brew install portaudio
+# (TTS uses built-in macOS voices, no additional install needed)
 ```
 
 **Start the daemon in simulation mode:**
@@ -194,19 +228,21 @@ python -m reachy_demo.main
    - Display the model's response
    - Show latency metrics (AIM call time, end-to-end time, SLO status)
    - Trigger an expressive robot gesture based on the response content
+   - **Speak the response** using TTS (daemon API or system TTS)
 
 **Example interaction:**
 ```
 You> What is machine learning?
 [AIM response appears in a panel with latency metrics]
 [Robot performs a gesture - e.g., "thinking" for questions, "excited" for positive responses]
+[Robot speaks the response using TTS]
 ```
 
 **To exit:** Press `Ctrl+C`
 
-### Robot Gestures in Sim Mode
+### Robot Gestures and Speech in Sim Mode
 
-The demo includes **fully implemented robot gestures** that work in simulation mode. Gestures are automatically selected based on the AIM response characteristics:
+The demo includes **fully implemented robot gestures and text-to-speech** that work in both simulation and hardware mode. Gestures are automatically selected based on the AIM response characteristics, and the robot will speak the AIM endpoint's responses.
 
 **Available Gestures:**
 - **`nod`** - Simple head nod (pitch down then back up)
@@ -226,6 +262,14 @@ The demo includes **fully implemented robot gestures** that work in simulation m
 - Otherwise → Random selection from `nod`, `thinking`, `confused`
 
 All gestures use the Reachy Mini daemon's `/api/move/goto` endpoint to control head pose (pitch, yaw, roll), antennas, and body yaw. The gestures are smooth and expressive, making the robot interaction feel natural even in simulation mode.
+
+**Text-to-Speech:**
+- The robot will speak the AIM endpoint's responses automatically
+- TTS method is auto-detected: tries daemon API first (`/api/speak`, `/api/tts`, etc.), falls back to system TTS (pyttsx3)
+- **In sim mode:** Typically uses system TTS (pyttsx3) which plays through your computer's speakers
+- **In hardware mode:** Will use daemon API if available (robot's speakers), otherwise falls back to system TTS
+- System TTS works offline and cross-platform (Windows, Linux, macOS)
+- You'll see a startup message indicating which TTS method is being used (e.g., `✓ TTS: Using system TTS (pyttsx3)`)
 
 ### Step 6: (Optional) Check Prometheus metrics
 
@@ -331,6 +375,24 @@ python -c "from reachy_demo.aim.client import AIMClient; from reachy_demo.orches
   ```
 - **Solution 3:** Skip the daemon entirely - the demo works without it (you'll just see a warning)
 
+**Issue: TTS not working or "No module named 'pyttsx3'"**
+- **Solution:** Install Python dependencies:
+  ```bash
+  pip install -e .
+  ```
+  This will install `pyttsx3` automatically (it's in `pyproject.toml`)
+
+**Issue: TTS works but no sound (Linux)**
+- **Solution:** Install system TTS backend:
+  ```bash
+  # Ubuntu/Debian:
+  sudo apt-get install espeak
+  
+  # Fedora/RHEL:
+  sudo dnf install espeak
+  ```
+  macOS and Windows have built-in TTS, so no additional install needed.
+
 **Issue: "Read timed out" or "AIM request failed after retries"**
 - **Cause:** The AIM endpoint is taking longer than the configured timeout to respond
 - **Solution:** Increase `AIM_TIMEOUT_MS` in your `.env` file:
@@ -347,6 +409,13 @@ python -c "from reachy_demo.aim.client import AIMClient; from reachy_demo.orches
 
 This Helm chart is **not for installing a Kubernetes cluster** on your host.
 It installs **demo add-ons in your existing Kubernetes cluster** (loadgen, dashboard configmap).
+
+**Chart Mode: URL-only** - The chart uses `aim.baseUrl` to connect to your AIM endpoint. This can be:
+- A Kubernetes Service URL (e.g., `http://aim.default.svc.cluster.local:8000`)
+- An external URL (e.g., `https://aim.example.com`)
+- A port-forward URL (e.g., `http://localhost:8000`)
+
+The chart does **not** deploy or manage the AIM endpoint itself - it only configures the load generator and dashboards to connect to your existing AIM service.
 
 ### Prerequisites
 
@@ -447,14 +516,16 @@ reachy-aim-enterprise-demo/
 - Local and Kubernetes load generators
 - Helm charts for cluster deployment
 - Robot health checks and state queries
-- **Robot gestures** - Multiple expressive gestures implemented via `/api/move/goto` endpoint
+- **Robot gestures** - **Fully functional** gestures implemented via `/api/move/goto` endpoint
+  - Works in both simulation and hardware mode
   - Supports: `nod`, `excited`, `thinking`, `greeting`, `happy`, `confused`, `random`, `wake_up`, `goto_sleep`
   - Gestures are automatically selected based on response characteristics for more natural interactions
-
-⚠️ **Placeholders (intentional, documented):**
-- `speak()` method - No-op placeholder (waiting for TTS/audio integration)
-
-The `speak()` method is a safe no-op and won't cause errors. The code gracefully handles it.
+  - All gestures make real API calls to control head pose, antennas, and body movements
+- **Text-to-Speech (TTS)** - **Fully implemented** with automatic fallback
+  - Priority 1: Reachy daemon API (if `/api/speak` or similar endpoint available)
+  - Priority 2: System TTS (pyttsx3) - offline, cross-platform fallback
+  - Automatically detects available method at startup
+  - Robot will speak the AIM endpoint's responses
 
 ## Configuration Reference
 
@@ -492,9 +563,11 @@ The `speak()` method is a safe no-op and won't cause errors. The code gracefully
    - Use `/api/move/play/recorded-move-dataset/{dataset}/{move}` for pre-recorded gestures
    - Modify gesture selection logic in `orchestrator/loop.py` to customize when gestures are triggered
 
-3. **Implement speech:**
-   - Wire `speak()` method to TTS service or device audio
-   - Update `src/reachy_demo/adapters/robot_rest.py`
+3. **Customize speech (optional):**
+   - TTS is already implemented with daemon API + system TTS fallback
+   - Robot automatically speaks AIM responses
+   - To customize: see `docs/tts-implementation.md` for advanced options (cloud TTS, async, etc.)
+   - Current implementation: daemon API (if available) → system TTS (pyttsx3) fallback
 
 ## Additional Notes
 

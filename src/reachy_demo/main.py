@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import typer
 from rich.console import Console
 
@@ -9,6 +10,12 @@ from .adapters.robot_sim import SimRobot
 from .adapters.robot_rest import ReachyDaemonREST
 from .obs.metrics import start_metrics_server
 from .orchestrator.loop import run_interactive_loop
+
+# Configure logging for robot adapter
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s: %(message)s'
+)
 
 app = typer.Typer(add_completion=False)
 console = Console()
@@ -21,12 +28,15 @@ def _make_robot(settings: Settings):
 @app.command()
 def run(
     aim_base_url: str = typer.Option(None, "--aim-base-url", help="Override AIM_BASE_URL"),
+    reachy_daemon_url: str = typer.Option(None, "--reachy-daemon-url", help="Override REACHY_DAEMON_URL"),
     model: str = typer.Option(None, "--model", help="Override AIM_MODEL"),
 ):
     """Run the interactive edge demo (sim-ready)."""
     s = load_settings()
     if aim_base_url:
         s = Settings(**{**s.__dict__, "aim_base_url": aim_base_url.rstrip("/")})
+    if reachy_daemon_url:
+        s = Settings(**{**s.__dict__, "reachy_daemon_url": reachy_daemon_url.rstrip("/")})
     if model:
         s = Settings(**{**s.__dict__, "aim_model": model})
 
