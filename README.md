@@ -193,15 +193,39 @@ python -m reachy_demo.main
    - Send your prompt to the AIM endpoint
    - Display the model's response
    - Show latency metrics (AIM call time, end-to-end time, SLO status)
-   - Attempt to trigger a robot gesture (placeholder in sim mode)
+   - Trigger an expressive robot gesture based on the response content
 
 **Example interaction:**
 ```
 You> What is machine learning?
 [AIM response appears in a panel with latency metrics]
+[Robot performs a gesture - e.g., "thinking" for questions, "excited" for positive responses]
 ```
 
 **To exit:** Press `Ctrl+C`
+
+### Robot Gestures in Sim Mode
+
+The demo includes **fully implemented robot gestures** that work in simulation mode. Gestures are automatically selected based on the AIM response characteristics:
+
+**Available Gestures:**
+- **`nod`** - Simple head nod (pitch down then back up)
+- **`excited`** - Antennas wiggle rapidly with head bobs (for positive/enthusiastic responses)
+- **`thinking`** - Head tilts side to side (for questions or processing)
+- **`greeting`** - Friendly nod with antennas raised (for short responses)
+- **`happy`** - Bouncy antennas with head bob (for fast, positive responses)
+- **`confused`** - Head shakes side to side (for uncertainty or longer responses)
+- **`wake_up`** - Wake up animation (uses daemon's built-in animation)
+- **`goto_sleep`** - Sleep animation (uses daemon's built-in animation)
+
+**Gesture Selection Logic:**
+- Questions (responses containing "?") → `thinking`
+- Positive keywords ("great", "excellent") → `excited`
+- Short responses (< 10 words) → `greeting`
+- Fast responses (< 500ms) → `happy`
+- Otherwise → Random selection from `nod`, `thinking`, `confused`
+
+All gestures use the Reachy Mini daemon's `/api/move/goto` endpoint to control head pose (pitch, yaw, roll), antennas, and body yaw. The gestures are smooth and expressive, making the robot interaction feel natural even in simulation mode.
 
 ### Step 6: (Optional) Check Prometheus metrics
 
@@ -457,14 +481,16 @@ The `speak()` method is a safe no-op and won't cause errors. The code gracefully
    # Run daemon with serial port instead of simulation
    reachy-mini-daemon -p /dev/ttyUSB0  # or your serial port
    ```
+   The existing gesture implementation will work with the physical robot - no code changes needed!
 
 2. **Customize gestures (optional):**
-   - Current implementation includes: `nod`, `excited`, `thinking`, `greeting`, `happy`, `confused`, `random`
+   - All gestures are already implemented and working in sim mode
+   - Current gestures: `nod`, `excited`, `thinking`, `greeting`, `happy`, `confused`, `wake_up`, `goto_sleep`
    - Gestures automatically selected based on response content and timing
    - Add more gestures by extending `gesture()` method in `src/reachy_demo/adapters/robot_rest.py`
    - Use `/api/move/goto` for custom head/body/antenna movements
    - Use `/api/move/play/recorded-move-dataset/{dataset}/{move}` for pre-recorded gestures
-   - Modify `_select_gesture()` in `orchestrator/loop.py` to customize gesture selection logic
+   - Modify gesture selection logic in `orchestrator/loop.py` to customize when gestures are triggered
 
 3. **Implement speech:**
    - Wire `speak()` method to TTS service or device audio
