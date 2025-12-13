@@ -1,0 +1,40 @@
+aim:
+  baseUrl: "http://aim.default.svc.cluster.local:8000"
+  chatPath: "/v1/chat/completions"
+  model: "llm-prod"
+
+ingress:
+  enabled: false
+  className: nginx
+  host: aim-demo.example.com
+  tls:
+    enabled: false
+    secretName: aim-demo-tls
+  path: /
+  pathType: Prefix
+
+monitoring:
+  enabled: true
+  installKubePromStack: false
+  namespace: monitoring
+
+dashboards:
+  enabled: true
+  labelKey: grafana_dashboard
+  labelValue: "1"
+
+loadgen:
+  enabled: true
+  schedule: "*/30 * * * *"
+  image: python:3.12-slim
+  durationSeconds: 60
+  concurrency: 8
+  qpsPerWorker: 1
+  promptSet:
+    - "Explain why HBM capacity matters for LLM inference in 4 sentences."
+    - "Summarize what Kubernetes-native inference means."
+    - "What is time-to-first-token and why does it matter?"
+  apiKey:
+    enabled: false
+    secretName: aim-api-key
+    secretKey: apiKey

@@ -1,0 +1,14 @@
+Reachy Demo Add-ons installed.
+
+AIM target:
+  Base URL: {{ .Values.aim.baseUrl }}
+  Chat Path: {{ .Values.aim.chatPath }}
+  Model: {{ .Values.aim.model }}
+
+Load generator:
+  CronJob: {{ include "reachy-demo-addons.fullname" . }}-loadgen
+  Trigger manually:
+    kubectl -n {{ .Release.Namespace }} create job --from=cronjob/{{ include "reachy-demo-addons.fullname" . }}-loadgen reachy-demo-loadgen-manual
+
+Dashboard ConfigMap:
+  {{ include "reachy-demo-addons.fullname" . }}-grafana-dashboard

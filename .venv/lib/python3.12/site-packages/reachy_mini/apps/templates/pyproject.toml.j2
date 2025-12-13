@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "{{ entrypoint_name }}"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "reachy-mini"
+]
+keywords = ["reachy-mini-app"]
+
+[project.entry-points."reachy_mini_apps"]
+{{ entrypoint_name }} = "{{ module_name }}.main:{{ class_name }}"
+
+[tool.setuptools]
+package-dir = { "" = "." }
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-data]
+{{ module_name }} = ["**/*"] # Also include all non-.py files

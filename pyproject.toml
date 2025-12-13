@@ -1,0 +1,25 @@
+[project]
+name = "reachy-aim-enterprise-demo"
+version = "0.1.0"
+description = "Reachy Mini Lite enterprise demo skeleton: edge client + OpenAI-compatible AIM + Helm add-ons"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+dependencies = [
+  "requests>=2.32.0",
+  "python-dotenv>=1.0.1",
+  "typer>=0.12.3",
+  "rich>=13.7.1",
+  "pydantic>=2.7.0",
+  "prometheus-client>=0.20.0",
+]
+
+[project.scripts]
+reachy-demo = "reachy_demo.main:app"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

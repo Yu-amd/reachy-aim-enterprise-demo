@@ -1,0 +1,2 @@
+[console_scripts]
+lscam = cv2_enumerate_cameras.__main__:main

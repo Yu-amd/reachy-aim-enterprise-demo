@@ -1,0 +1,59 @@
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from dotenv import load_dotenv
+
+load_dotenv()
+
+def _env(key: str, default: str | None = None) -> str | None:
+    v = os.getenv(key)
+    if v is None or v == "":
+        return default
+    return v
+
+def _env_int(key: str, default: int) -> int:
+    v = _env(key)
+    if v is None:
+        return default
+    try:
+        return int(v)
+    except ValueError:
+        return default
+
+@dataclass(frozen=True)
+class Settings:
+    # AIM (OpenAI-compatible)
+    aim_base_url: str
+    aim_chat_path: str = "/v1/chat/completions"
+    aim_model: str = "llm-prod"
+    aim_api_key: str | None = None
+    aim_timeout_ms: int = 2200
+    aim_max_retries: int = 1
+
+    # Reachy Mini daemon
+    reachy_daemon_url: str = "http://127.0.0.1:8000"
+    robot_mode: str = "sim"  # sim|hardware
+
+    # SLO + metrics
+    e2e_slo_ms: int = 2500
+    metrics_host: str = "127.0.0.1"
+    metrics_port: int = 9100
+
+def load_settings() -> Settings:
+    base = _env("AIM_BASE_URL")
+    if not base:
+        raise RuntimeError("AIM_BASE_URL is required. Set it in .env or environment.")
+    return Settings(
+        aim_base_url=base.rstrip("/"),
+        aim_chat_path=_env("AIM_CHAT_PATH", "/v1/chat/completions") or "/v1/chat/completions",
+        aim_model=_env("AIM_MODEL", "llm-prod") or "llm-prod",
+        aim_api_key=_env("AIM_API_KEY", None),
+        aim_timeout_ms=_env_int("AIM_TIMEOUT_MS", 2200),
+        aim_max_retries=_env_int("AIM_MAX_RETRIES", 1),
+        reachy_daemon_url=_env("REACHY_DAEMON_URL", "http://127.0.0.1:8000") or "http://127.0.0.1:8000",
+        robot_mode=_env("ROBOT_MODE", "sim") or "sim",
+        e2e_slo_ms=_env_int("E2E_SLO_MS", 2500),
+        metrics_host=_env("EDGE_METRICS_HOST", "127.0.0.1") or "127.0.0.1",
+        metrics_port=_env_int("EDGE_METRICS_PORT", 9100),
+    )

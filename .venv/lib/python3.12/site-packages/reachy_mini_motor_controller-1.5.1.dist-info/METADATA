@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: reachy_mini_motor_controller
+Version: 1.5.1
+Classifier: Programming Language :: Rust
+Classifier: Programming Language :: Python :: Implementation :: CPython
+Classifier: Programming Language :: Python :: Implementation :: PyPy
+Requires-Dist: pytest ; extra == 'tests'
+Provides-Extra: tests
+Requires-Python: >=3.10

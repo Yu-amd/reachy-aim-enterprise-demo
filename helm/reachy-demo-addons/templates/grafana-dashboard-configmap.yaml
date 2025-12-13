@@ -1,0 +1,76 @@
+{{- if .Values.dashboards.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "reachy-demo-addons.fullname" . }}-grafana-dashboard
+  labels:
+    {{ .Values.dashboards.labelKey }}: {{ .Values.dashboards.labelValue | quote }}
+data:
+  reachy-aim-demo.json: |
+    {
+      "title": "Reachy + AIM Demo (Client-side metrics)",
+      "timezone": "browser",
+      "schemaVersion": 38,
+      "version": 1,
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "edge_e2e_ms p50/p95",
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(edge_e2e_ms_bucket[1m])) by (le))",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(edge_e2e_ms_bucket[1m])) by (le))",
+              "refId": "B"
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "title": "aim_call_ms p50/p95",
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(aim_call_ms_bucket[1m])) by (le))",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(aim_call_ms_bucket[1m])) by (le))",
+              "refId": "B"
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "title": "edge_requests_total",
+          "targets": [
+            {
+              "expr": "sum(edge_requests_total)",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "title": "edge_errors_total",
+          "targets": [
+            {
+              "expr": "sum(edge_errors_total)",
+              "refId": "A"
+            }
+          ]
+        },
+        {
+          "type": "stat",
+          "title": "edge_slo_miss_total",
+          "targets": [
+            {
+              "expr": "sum(edge_slo_miss_total)",
+              "refId": "A"
+            }
+          ]
+        }
+      ]
+    }
+{{- end }}

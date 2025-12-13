@@ -1,0 +1,27 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "reachy-demo-addons.fullname" . }}-aim
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: {{ .Values.ingress.path | quote }}
+            pathType: {{ .Values.ingress.pathType | default "Prefix" | quote }}
+            backend:
+              service:
+                name: {{ .Values.aim.serviceName | default "aim" | quote }}
+                port:
+                  number: {{ .Values.aim.servicePort | default 8000 }}
+{{- end }}
