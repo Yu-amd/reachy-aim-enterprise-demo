@@ -30,13 +30,18 @@ AIM Endpoint (OpenAI-compatible) on MI300X (Cluster)
 - Reachy daemon runs locally on edge host (sim or hardware)
 - **Use case:** Production-like setup, real inference hardware
 
-### Mode B: Local AIM Endpoint
-- **AIM runs on the same host** as edge client (Docker/local)
-- Both AIM and daemon need different ports (AIM: 8000, daemon: 8001)
-- **Use case:** Development, testing without cluster access
+### Mode B: Local LLM Endpoint
+- **Local LLM endpoint runs on the same host** as edge client
+- Supports OpenAI-compatible endpoints:
+  - **Ollama** (local LLM runner)
+  - **LMStudio** (local LLM GUI/server)
+  - **Custom OpenAI-compatible endpoint**
+- Both LLM endpoint and daemon need different ports (LLM: 8000, daemon: 8001)
+- **Note:** AIM (AMD Inference Microservice) requires Instinct GPU hardware and is not supported locally
+- **Use case:** Development, testing without cluster access, local experimentation
 
 ### Mode C: Offline Stub (Future)
-- Run without AIM; prints canned responses
+- Run without LLM endpoint; prints canned responses
 - Useful for robot-only testing
 
 ## Golden Path (No Robot Required)
@@ -139,11 +144,13 @@ pip install -e .
 python -m reachy_demo.main --help
 ```
 
-### Step 2: Deploy AIM Endpoint (Docker)
+### Step 2: Deploy LLM Endpoint
 
-Before configuring the edge client, you need to deploy the AIM endpoint. This project uses the AIM endpoint from the [AIM-demo repository](https://github.com/Yu-amd/AIM-demo).
+Before configuring the edge client, you need an OpenAI-compatible LLM endpoint. Choose based on your setup:
 
-**Clone and deploy the AIM endpoint:**
+#### Option A: Remote AIM Endpoint (Mode A - Recommended)
+
+For production setups with Instinct GPU hardware, deploy AIM in your cluster:
 
 ```bash
 # Clone the AIM-demo repository
@@ -151,50 +158,55 @@ git clone https://github.com/Yu-amd/AIM-demo.git
 cd AIM-demo
 
 # Follow the Docker deployment instructions in that repository
-# Common deployment methods:
+# Deploy to cluster with Instinct GPUs (MI300X)
 ```
 
-**Option A: Using Docker Compose (if available)**
+**Note:** AIM (AMD Inference Microservice) requires Instinct GPU hardware and is typically deployed in a datacenter/cluster environment, not locally.
+
+**Verify the AIM endpoint:**
 ```bash
-docker-compose up -d
-```
-
-**Option B: Using Docker Run**
-```bash
-docker run -d \
-  --name aim-endpoint \
-  -p 8000:8000 \
-  <aim-image-name>
-```
-
-**Option C: Follow AIM-demo specific instructions**
-- Check the AIM-demo README for exact deployment commands
-- The repository may have specific requirements or setup scripts
-
-**Verify AIM endpoint is running:**
-
-```bash
-# Check health endpoint (if available)
+# If using SSH port forward: ssh -L 8000:localhost:8000 user@cluster-host
 curl http://127.0.0.1:8000/health
-
-# Check API documentation
 curl http://127.0.0.1:8000/docs
-
-# Test chat completions endpoint
-curl -X POST http://127.0.0.1:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "llm-prod",
-    "messages": [{"role": "user", "content": "Hello"}],
-    "max_tokens": 50
-  }'
 ```
 
-**Note:** For the most up-to-date deployment instructions, refer to the [AIM-demo repository README](https://github.com/Yu-amd/AIM-demo).
+#### Option B: Local LLM Endpoint (Mode B)
 
-**Alternative: Using existing AIM endpoint**
+For local development/testing without Instinct GPUs, use an OpenAI-compatible local LLM:
 
-If you already have an AIM endpoint running (e.g., in Kubernetes, cloud service, etc.), skip this step and proceed to Step 3. Just make sure to set `AIM_BASE_URL` in Step 3 to point to your existing endpoint.
+**Ollama:**
+```bash
+# Install Ollama: https://ollama.ai
+ollama serve  # Runs on http://localhost:11434 by default
+
+# Pull a model
+ollama pull llama2
+
+# Ollama uses /api/chat endpoint, configure AIM_BASE_URL=http://localhost:11434
+# and AIM_CHAT_PATH=/api/chat in .env
+```
+
+**LMStudio:**
+```bash
+# Install LMStudio: https://lmstudio.ai
+# Start LMStudio server (usually http://localhost:1234)
+# Configure AIM_BASE_URL=http://localhost:1234 in .env
+```
+
+**Custom OpenAI-compatible endpoint:**
+- Any endpoint that implements the OpenAI chat completions API
+- Set `AIM_BASE_URL` and `AIM_CHAT_PATH` accordingly
+
+**Verify local endpoint:**
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "llm-prod", "messages": [{"role": "user", "content": "Hello!"}], "max_tokens": 50}'
+```
+
+**Alternative: Using existing endpoint**
+
+If you already have an LLM endpoint running (AIM in cluster, Ollama locally, etc.), skip deployment and proceed to Step 3. Just make sure to set `AIM_BASE_URL` in Step 3 to point to your endpoint.
 
 ### Step 3: Configure environment variables
 
