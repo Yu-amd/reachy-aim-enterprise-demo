@@ -1,6 +1,10 @@
 aim:
-  # baseUrl is used by the loadgen container to connect to AIM endpoint
-  # This can be a Service URL (cluster-internal) or external URL
+  # URL-mode configuration: Direct URL to AIM endpoint (OpenAI-compatible)
+  # Supports:
+  #   - Cluster-internal: http://aim.default.svc.cluster.local:8000
+  #   - External: https://aim.example.com
+  #   - Port-forward: http://localhost:8000 (if loadgen runs locally)
+  # No Service name/port assumptions - maximum flexibility
   baseUrl: "http://aim.default.svc.cluster.local:8000"
   chatPath: "/v1/chat/completions"
   model: "llm-prod"

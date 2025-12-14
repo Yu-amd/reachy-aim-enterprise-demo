@@ -1,14 +1,18 @@
 Reachy Demo Add-ons installed.
 
-AIM target:
+AIM target (URL-mode):
   Base URL: {{ .Values.aim.baseUrl }}
   Chat Path: {{ .Values.aim.chatPath }}
   Model: {{ .Values.aim.model }}
 
 Load generator:
   CronJob: {{ include "reachy-demo-addons.fullname" . }}-loadgen
+  Uses same env vars as edge client: AIM_BASE_URL, AIM_CHAT_PATH, AIM_MODEL
   Trigger manually:
     kubectl -n {{ .Release.Namespace }} create job --from=cronjob/{{ include "reachy-demo-addons.fullname" . }}-loadgen reachy-demo-loadgen-manual
 
 Dashboard ConfigMap:
   {{ include "reachy-demo-addons.fullname" . }}-grafana-dashboard
+  {{- if not .Values.monitoring.installKubePromStack }}
+  Note: Monitoring stack not installed. Import this ConfigMap into your existing Grafana instance.
+  {{- end }}
