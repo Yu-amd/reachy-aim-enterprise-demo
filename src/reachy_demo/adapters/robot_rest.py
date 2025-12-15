@@ -6,6 +6,7 @@ import random
 import logging
 import threading
 import subprocess
+import re
 from typing import Dict, Any, Optional
 from .robot_base import RobotAdapter
 
@@ -99,20 +100,23 @@ class ReachyDaemonREST(RobotAdapter):
                 if voices:
                     selected_voice = None
                     
-                    # First: Prefer British female voices
+                    # First: Prefer American female voices
                     for voice in voices:
                         voice_name_lower = voice.name.lower()
                         voice_id_lower = voice.id.lower()
                         # Explicitly avoid Chinese voices
                         if any(x in voice_name_lower or x in voice_id_lower for x in ['chinese', 'zh', 'cn', 'mandarin', 'cantonese']):
                             continue
-                        # Look for British voices (prioritize British over other English accents)
-                        if (any(x in voice_name_lower or x in voice_id_lower for x in ['british', 'uk', 'gb', 'england', 'english_gb', 'en_gb', 'english-uk']) and 
+                        # Avoid Belarusian and other non-English languages
+                        if any(x in voice_id_lower for x in ['/be', '/ru', '/de', '/fr', '/es', '/it', '/pl', '/uk']) or 'belarusian' in voice_name_lower:
+                            continue
+                        # Look for American voices (prioritize American over other English accents)
+                        if (any(x in voice_name_lower or x in voice_id_lower for x in ['american', 'us', 'usa', 'english_us', 'en_us', 'english-us', 'united states']) and 
                             ('female' in voice_name_lower or 'f' in voice_id_lower)):
                             selected_voice = voice
                             break
                     
-                    # Second: British male voices
+                    # Second: American male voices
                     if selected_voice is None:
                         for voice in voices:
                             voice_name_lower = voice.name.lower()
@@ -120,12 +124,15 @@ class ReachyDaemonREST(RobotAdapter):
                             # Explicitly avoid Chinese voices
                             if any(x in voice_name_lower or x in voice_id_lower for x in ['chinese', 'zh', 'cn', 'mandarin', 'cantonese']):
                                 continue
-                            # Look for British voices
-                            if any(x in voice_name_lower or x in voice_id_lower for x in ['british', 'uk', 'gb', 'england', 'english_gb', 'en_gb', 'english-uk']):
+                            # Avoid Belarusian and other non-English languages
+                            if any(x in voice_id_lower for x in ['/be', '/ru', '/de', '/fr', '/es', '/it', '/pl', '/uk']) or 'belarusian' in voice_name_lower:
+                                continue
+                            # Look for American voices
+                            if any(x in voice_name_lower or x in voice_id_lower for x in ['american', 'us', 'usa', 'english_us', 'en_us', 'english-us', 'united states']):
                                 selected_voice = voice
                                 break
                     
-                    # Third: Other English voices (avoid Irish/American if possible, but prefer over non-English)
+                    # Third: Other English voices (prefer over non-English)
                     if selected_voice is None:
                         for voice in voices:
                             voice_name_lower = voice.name.lower()
@@ -133,29 +140,26 @@ class ReachyDaemonREST(RobotAdapter):
                             # Explicitly avoid Chinese voices
                             if any(x in voice_name_lower or x in voice_id_lower for x in ['chinese', 'zh', 'cn', 'mandarin', 'cantonese']):
                                 continue
-                            # Avoid Irish if we can find other English
-                            if 'irish' in voice_name_lower or 'ie' in voice_id_lower:
+                            # Avoid Belarusian and other non-English languages
+                            if any(x in voice_id_lower for x in ['/be', '/ru', '/de', '/fr', '/es', '/it', '/pl', '/uk']) or 'belarusian' in voice_name_lower:
                                 continue
-                            # Look for English indicators
-                            if ('english' in voice_name_lower or 'en' in voice_id_lower):
+                            # Look for English indicators - be more specific
+                            # Check for "english" in name or "en" as language code (en-us, en-gb, etc.)
+                            if ('english' in voice_name_lower or 
+                                voice_id_lower.startswith('en') or 
+                                '/en' in voice_id_lower or
+                                voice_id_lower.startswith('en-')):
                                 selected_voice = voice
                                 break
                     
-                    # Fourth: Use first non-Chinese voice if no English found
+                    # Fourth: Use default English voice if available, otherwise skip
+                    # Don't use random non-English voices
                     if selected_voice is None:
-                        for voice in voices:
-                            voice_name_lower = voice.name.lower()
-                            voice_id_lower = voice.id.lower()
-                            # Explicitly avoid Chinese voices
-                            if not any(x in voice_name_lower or x in voice_id_lower for x in ['chinese', 'zh', 'cn', 'mandarin', 'cantonese']):
-                                selected_voice = voice
-                                break
+                        logger.warning("⚠ TTS: No suitable English voice found, will use system default")
                     
                     if selected_voice:
                         self._tts_engine.setProperty('voice', selected_voice.id)
-                        logger.info(f"✓ TTS: Using British English voice: {selected_voice.name} (ID: {selected_voice.id})")
-                    else:
-                        logger.warning("⚠ TTS: No suitable English voice found, using default")
+                        logger.info(f"✓ TTS: Using American English voice: {selected_voice.name} (ID: {selected_voice.id})")
                 self._tts_method = "system"
                 logger.info("✓ TTS: Using system TTS (pyttsx3) - daemon API not available")
             except Exception as e:
@@ -508,10 +512,20 @@ class ReachyDaemonREST(RobotAdapter):
             logger.warning(f"🔊 System TTS unavailable: '{text[:50]}...'")
             return
         
+        # Capture text in closure to avoid scoping issues
+        text_to_speak = text
+        
         def _speak_async():
             """Run TTS in background thread to avoid blocking."""
             try:
-                logger.info(f"🔊 Speaking via system TTS ({len(text)} chars): '{text[:100]}{'...' if len(text) > 100 else ''}'")
+                # Clean and normalize text before speaking
+                # Ensure text is a string, not a list or iterable
+                if not isinstance(text_to_speak, str):
+                    input_text = str(text_to_speak)
+                else:
+                    input_text = text_to_speak
+                
+                logger.info(f"🔊 Speaking via system TTS ({len(input_text)} chars): '{input_text[:100]}{'...' if len(input_text) > 100 else ''}'")
                 
                 # Use pyttsx3 directly - it's more reliable and handles audio routing better
                 # Create a new engine instance for this thread (pyttsx3 is not thread-safe)
@@ -524,25 +538,28 @@ class ReachyDaemonREST(RobotAdapter):
                 engine.setProperty('volume', 1.0)  # Max volume
                 logger.info(f"TTS properties - rate: {engine.getProperty('rate')}, volume: {engine.getProperty('volume')}")
                 
-                # Try to set a British English voice explicitly (avoid Chinese, prefer British over Irish/American)
+                # Try to set an American English voice explicitly (avoid Chinese, prefer American over other accents)
                 voices = engine.getProperty('voices')
                 if voices:
                     selected_voice = None
                     
-                    # First: Prefer British female voices
+                    # First: Prefer American female voices
                     for voice in voices:
                         voice_name_lower = voice.name.lower()
                         voice_id_lower = voice.id.lower()
                         # Explicitly avoid Chinese voices
                         if any(x in voice_name_lower or x in voice_id_lower for x in ['chinese', 'zh', 'cn', 'mandarin', 'cantonese']):
                             continue
-                        # Look for British voices (prioritize British over other English accents)
-                        if (any(x in voice_name_lower or x in voice_id_lower for x in ['british', 'uk', 'gb', 'england', 'english_gb', 'en_gb', 'english-uk']) and 
+                        # Avoid Belarusian and other non-English languages
+                        if any(x in voice_id_lower for x in ['/be', '/ru', '/de', '/fr', '/es', '/it', '/pl', '/uk']) or 'belarusian' in voice_name_lower:
+                            continue
+                        # Look for American voices (prioritize American over other English accents)
+                        if (any(x in voice_name_lower or x in voice_id_lower for x in ['american', 'us', 'usa', 'english_us', 'en_us', 'english-us', 'united states']) and 
                             ('female' in voice_name_lower or 'f' in voice_id_lower)):
                             selected_voice = voice
                             break
                     
-                    # Second: British male voices
+                    # Second: American male voices
                     if selected_voice is None:
                         for voice in voices:
                             voice_name_lower = voice.name.lower()
@@ -550,12 +567,15 @@ class ReachyDaemonREST(RobotAdapter):
                             # Explicitly avoid Chinese voices
                             if any(x in voice_name_lower or x in voice_id_lower for x in ['chinese', 'zh', 'cn', 'mandarin', 'cantonese']):
                                 continue
-                            # Look for British voices
-                            if any(x in voice_name_lower or x in voice_id_lower for x in ['british', 'uk', 'gb', 'england', 'english_gb', 'en_gb', 'english-uk']):
+                            # Avoid Belarusian and other non-English languages
+                            if any(x in voice_id_lower for x in ['/be', '/ru', '/de', '/fr', '/es', '/it', '/pl', '/uk']) or 'belarusian' in voice_name_lower:
+                                continue
+                            # Look for American voices
+                            if any(x in voice_name_lower or x in voice_id_lower for x in ['american', 'us', 'usa', 'english_us', 'en_us', 'english-us', 'united states']):
                                 selected_voice = voice
                                 break
                     
-                    # Third: Other English voices (avoid Irish/American if possible, but prefer over non-English)
+                    # Third: Other English voices (prefer over non-English)
                     if selected_voice is None:
                         for voice in voices:
                             voice_name_lower = voice.name.lower()
@@ -563,36 +583,161 @@ class ReachyDaemonREST(RobotAdapter):
                             # Explicitly avoid Chinese voices
                             if any(x in voice_name_lower or x in voice_id_lower for x in ['chinese', 'zh', 'cn', 'mandarin', 'cantonese']):
                                 continue
-                            # Avoid Irish if we can find other English
-                            if 'irish' in voice_name_lower or 'ie' in voice_id_lower:
+                            # Avoid Belarusian and other non-English languages
+                            if any(x in voice_id_lower for x in ['/be', '/ru', '/de', '/fr', '/es', '/it', '/pl', '/uk']) or 'belarusian' in voice_name_lower:
                                 continue
-                            # Look for English indicators
-                            if ('english' in voice_name_lower or 'en' in voice_id_lower):
+                            # Look for English indicators - be more specific
+                            # Check for "english" in name or "en" as language code (en-us, en-gb, etc.)
+                            if ('english' in voice_name_lower or 
+                                voice_id_lower.startswith('en') or 
+                                '/en' in voice_id_lower or
+                                voice_id_lower.startswith('en-')):
                                 selected_voice = voice
                                 break
                     
-                    # Fourth: Use first non-Chinese voice if no English found
+                    # Fourth: Use default English voice if available, otherwise skip
+                    # Don't use random non-English voices
                     if selected_voice is None:
-                        for voice in voices:
-                            voice_name_lower = voice.name.lower()
-                            voice_id_lower = voice.id.lower()
-                            # Explicitly avoid Chinese voices
-                            if not any(x in voice_name_lower or x in voice_id_lower for x in ['chinese', 'zh', 'cn', 'mandarin', 'cantonese']):
-                                selected_voice = voice
-                                break
+                        logger.warning("⚠ TTS: No suitable English voice found, will use system default")
                     
                     if selected_voice:
-                        engine.setProperty('voice', selected_voice.id)
-                        logger.info(f"✓ TTS: Using British English voice: {selected_voice.name} (ID: {selected_voice.id})")
-                    else:
-                        logger.warning("⚠ TTS: No suitable English voice found, using default")
+                        # Double-check we didn't accidentally select a non-English voice
+                        voice_id_lower = selected_voice.id.lower()
+                        voice_name_lower = selected_voice.name.lower()
+                        if any(x in voice_id_lower for x in ['/be', '/ru', '/de', '/fr', '/es', '/it', '/pl', '/uk']) or 'belarusian' in voice_name_lower:
+                            logger.error(f"⚠ ERROR: Selected non-English voice {selected_voice.name} (ID: {selected_voice.id}) - rejecting!")
+                            selected_voice = None
+                        
+                        if selected_voice:
+                            engine.setProperty('voice', selected_voice.id)
+                            logger.info(f"✓ TTS: Using American English voice: {selected_voice.name} (ID: {selected_voice.id})")
+                        else:
+                            logger.warning("⚠ TTS: Selected voice was rejected, using system default")
                 
-                # Use the text as-is - espeak handles punctuation naturally
-                logger.info(f"TTS engine saying ({len(text)} chars): '{text[:100]}{'...' if len(text) > 100 else ''}'")
-                engine.say(text)
-                logger.info("TTS engine.runAndWait() called - audio should be playing now...")
-                engine.runAndWait()
-                logger.info(f"✓ TTS playback completed for {len(text)} character text")
+                # Remove any special formatting that might cause TTS to spell letters
+                cleaned_text = input_text.strip()
+                # Normalize whitespace (replace multiple spaces/tabs/newlines with single space)
+                cleaned_text = re.sub(r'\s+', ' ', cleaned_text)
+                # Remove any zero-width or invisible characters that might confuse TTS
+                cleaned_text = re.sub(r'[\u200b-\u200f\u2028-\u202f]', '', cleaned_text)
+                # Ensure text ends with punctuation for natural speech
+                if cleaned_text and cleaned_text[-1] not in '.!?,:;':
+                    cleaned_text += '.'
+                
+                # Ensure we have valid text to speak
+                if not cleaned_text or len(cleaned_text.strip()) == 0:
+                    logger.warning("⚠ TTS: Empty text after cleaning, skipping")
+                    return
+                
+                logger.info(f"TTS engine saying ({len(cleaned_text)} chars): '{cleaned_text[:100]}{'...' if len(cleaned_text) > 100 else ''}'")
+                
+                # Try multiple TTS methods to work around audio system issues
+                speech_text = str(cleaned_text)
+                tts_success = False
+                
+                # Method 1: Try pyttsx3 first
+                try:
+                    logger.info(f"Speaking via pyttsx3: '{speech_text[:50]}...'")
+                    current_voice = engine.getProperty('voice')
+                    logger.debug(f"Using voice: {current_voice}")
+                    engine.say(speech_text)
+                    engine.runAndWait()
+                    logger.info(f"✓ TTS playback completed via pyttsx3 for {len(cleaned_text)} character text")
+                    tts_success = True
+                except Exception as pyttsx_error:
+                    logger.warning(f"⚠ pyttsx3 failed: {pyttsx_error}, trying espeak directly...")
+                
+                # Method 2: Try espeak directly with ALSA workaround
+                if not tts_success:
+                    try:
+                        logger.info(f"Trying espeak directly with ALSA workaround: '{speech_text[:50]}...'")
+                        import os
+                        env = os.environ.copy()
+                        
+                        # Workaround for ALSA issues: pipe espeak output through aplay
+                        # This bypasses ALSA configuration problems
+                        espeak_cmd = ['espeak', '-s', '175', '-a', '150', '--stdout', speech_text]
+                        aplay_cmd = ['aplay', '-q']  # -q suppresses ALSA errors
+                        
+                        # Run espeak and pipe to aplay
+                        espeak_proc = subprocess.Popen(
+                            espeak_cmd,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL,
+                            env=env
+                        )
+                        aplay_proc = subprocess.Popen(
+                            aplay_cmd,
+                            stdin=espeak_proc.stdout,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL
+                        )
+                        espeak_proc.stdout.close()
+                        
+                        # Wait for both processes
+                        espeak_proc.wait(timeout=30)
+                        aplay_proc.wait(timeout=30)
+                        
+                        if espeak_proc.returncode == 0 and aplay_proc.returncode == 0:
+                            logger.info(f"✓ TTS playback completed via espeak+aplay for {len(cleaned_text)} character text")
+                            tts_success = True
+                        else:
+                            logger.warning(f"⚠ espeak+aplay failed (espeak: {espeak_proc.returncode}, aplay: {aplay_proc.returncode})")
+                    except FileNotFoundError as e:
+                        logger.error(f"⚠ espeak or aplay not found: {e}")
+                    except subprocess.TimeoutExpired:
+                        logger.error("⚠ espeak+aplay timed out")
+                        try:
+                            espeak_proc.kill()
+                            aplay_proc.kill()
+                        except:
+                            pass
+                    except Exception as espeak_error:
+                        logger.warning(f"⚠ espeak+aplay failed: {espeak_error}")
+                        
+                        # Fallback: Try espeak directly (ignore ALSA errors)
+                        try:
+                            logger.info("Trying espeak directly (ignoring ALSA errors)...")
+                            env['AUDIODEV'] = 'default'
+                            result = subprocess.run(
+                                ['espeak', '-s', '175', '-a', '150', speech_text],
+                                env=env,
+                                timeout=30,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL  # Suppress ALSA errors
+                            )
+                            if result.returncode == 0:
+                                logger.info(f"✓ TTS playback completed via espeak (errors suppressed) for {len(cleaned_text)} character text")
+                                tts_success = True
+                        except Exception:
+                            pass
+                
+                # Method 3: Try to fix audio and retry pyttsx3
+                if not tts_success:
+                    try:
+                        logger.info("Attempting to fix audio settings and retry...")
+                        # Try to ensure audio is unmuted
+                        try:
+                            subprocess.run(['amixer', 'set', 'Master', 'unmute'], 
+                                         timeout=2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            subprocess.run(['amixer', 'set', 'Master', '50%'], 
+                                         timeout=2, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        except Exception:
+                            pass  # Ignore amixer errors
+                        
+                        # Retry pyttsx3
+                        retry_engine = pyttsx3.init()
+                        retry_engine.setProperty('rate', 200)
+                        retry_engine.setProperty('volume', 1.0)
+                        retry_engine.say(speech_text)
+                        retry_engine.runAndWait()
+                        logger.info(f"✓ TTS playback completed via pyttsx3 retry for {len(cleaned_text)} character text")
+                        tts_success = True
+                    except Exception as retry_error:
+                        logger.error(f"⚠ Audio fix and retry failed: {retry_error}")
+                
+                if not tts_success:
+                    logger.error(f"⚠ All TTS methods failed - audio may not be working. Text was: '{speech_text[:50]}...'")
             except Exception as e:
                 logger.error(f"⚠ System TTS error: {e}", exc_info=True)
         
