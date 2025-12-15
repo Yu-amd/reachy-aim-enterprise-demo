@@ -48,7 +48,14 @@ AIM Endpoint (OpenAI-compatible) on MI300X (Cluster)
 # Setup (one time)
 make install
 cp .env.example .env
-# Edit .env: Set AIM_BASE_URL to your AIM endpoint
+
+# Edit .env: Set AIM_BASE_URL to your LLM endpoint
+# REQUIRED: Update AIM_BASE_URL in .env
+# Examples:
+#   - Remote AIM: http://127.0.0.1:8000 (via SSH port forward)
+#   - Local Ollama: http://localhost:11434
+#   - Local LMStudio: http://localhost:1234
+#   - LMStudio on network: http://192.168.1.131:1234
 
 # Terminal 1: Start Reachy daemon on port 8001 (avoids AIM port conflicts)
 make sim
@@ -69,7 +76,13 @@ Same as the [Golden Path](#golden-path-no-robot-required) above:
 # Setup (one time)
 make install
 cp .env.example .env
-# Edit .env and set AIM_BASE_URL to your AIM endpoint
+
+# REQUIRED: Edit .env and update AIM_BASE_URL to your LLM endpoint
+# Examples:
+#   - Remote AIM: http://127.0.0.1:8000 (via SSH port forward)
+#   - Local Ollama: http://localhost:11434
+#   - Local LMStudio: http://localhost:1234
+#   - LMStudio on network: http://192.168.1.131:1234
 
 # Terminal 1: Start Reachy daemon simulation (port 8001)
 make sim
