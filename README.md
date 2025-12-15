@@ -530,6 +530,7 @@ The chart does **not** deploy or manage the AIM endpoint itself - it only config
 - Kubernetes cluster with `kubectl` configured
 - `helm` 3.x installed
 - Access to the cluster where AIM endpoint is running
+- AIM endpoint already deployed and accessible (Docker deployment or Kubernetes service)
 
 ### Installation Steps
 
@@ -540,7 +541,17 @@ helm dependency update
 cd ../..
 ```
 
-**Step 2: Install the chart**
+**Step 2: Determine your AIM endpoint URL**
+
+Before installing, identify how to reach your AIM endpoint from within the cluster:
+
+- **If AIM is deployed in Kubernetes:** Use the Service URL (e.g., `http://aim.default.svc.cluster.local:8000`)
+- **If AIM is deployed via Docker on a remote node:** Use the node's IP or hostname (e.g., `http://192.168.1.100:8000`)
+- **If AIM is external:** Use the external URL (e.g., `https://aim.example.com`)
+
+**Step 3: Install the chart**
+
+For AIM deployed in Kubernetes (same cluster):
 ```bash
 helm upgrade --install reachy-demo \
   helm/reachy-demo-addons \
@@ -550,36 +561,104 @@ helm upgrade --install reachy-demo \
   --set aim.model="llm-prod"
 ```
 
-**Customize values:**
-- Edit `helm/reachy-demo-addons/values.yaml` or use `--set` flags
-- Common customizations:
-  - `aim.baseUrl` - Your AIM service URL in cluster
-  - `aim.model` - Model name to use
-  - `loadgen.schedule` - Cron schedule for load generator
-  - `loadgen.concurrency` - Number of concurrent workers
+For AIM deployed via Docker on remote node:
+```bash
+helm upgrade --install reachy-demo \
+  helm/reachy-demo-addons \
+  -n reachy-demo \
+  --create-namespace \
+  --set aim.baseUrl="http://<remote-node-ip>:8000" \
+  --set aim.model="llm-prod" \
+  --set loadgen.timeoutSeconds=60
+```
 
-**Step 3: Verify installation**
+**Note:** If your AIM endpoint takes longer than 30 seconds to respond, increase `loadgen.timeoutSeconds` (default is 30s, matching edge client default).
+
+**Step 4: Verify installation**
 ```bash
 # Check resources
 kubectl -n reachy-demo get all
 
 # Check CronJob
 kubectl -n reachy-demo get cronjob
+
+# Check ConfigMaps
+kubectl -n reachy-demo get configmap
 ```
 
-### Trigger Load Generator Manually
+**Step 5: Test the load generator**
 
-The load generator runs on a schedule, but you can trigger it manually:
-
+Trigger a manual test run:
 ```bash
 # Create a one-off job from the CronJob
 kubectl -n reachy-demo create job --from=cronjob/reachy-demo-addons-loadgen reachy-demo-loadgen-manual
 
-# Watch the logs
+# Watch the logs (wait for job to start)
+kubectl -n reachy-demo wait --for=condition=ready pod -l job-name=reachy-demo-loadgen-manual --timeout=60s
 kubectl -n reachy-demo logs -f job/reachy-demo-loadgen-manual
 ```
 
-**Expected output:** Statistics showing request count, p50, p95, and mean latency.
+**Expected output:** 
+```
+requests=120 successful, 0 errors, p50=450ms p95=1200ms mean=550ms url=http://aim.default.svc.cluster.local:8000/v1/chat/completions
+```
+
+**Step 6: Check job status**
+```bash
+# View job details
+kubectl -n reachy-demo describe job reachy-demo-loadgen-manual
+
+# Check if job completed successfully
+kubectl -n reachy-demo get job reachy-demo-loadgen-manual
+```
+
+### Customization
+
+Edit `helm/reachy-demo-addons/values.yaml` or use `--set` flags:
+
+**Common customizations:**
+- `aim.baseUrl` - Your AIM service URL (required)
+- `aim.model` - Model name to use (default: `llm-prod`)
+- `aim.chatPath` - Chat completions path (default: `/v1/chat/completions`)
+- `loadgen.schedule` - Cron schedule (default: `*/30 * * * *` - every 30 minutes)
+- `loadgen.concurrency` - Number of concurrent workers (default: `8`)
+- `loadgen.durationSeconds` - Test duration (default: `60`)
+- `loadgen.timeoutSeconds` - Request timeout (default: `30`, increase if AIM is slow)
+- `loadgen.qpsPerWorker` - Requests per second per worker (default: `1`)
+
+**Example with custom values:**
+```bash
+helm upgrade --install reachy-demo \
+  helm/reachy-demo-addons \
+  -n reachy-demo \
+  --create-namespace \
+  --set aim.baseUrl="http://aim.default.svc.cluster.local:8000" \
+  --set loadgen.concurrency=16 \
+  --set loadgen.durationSeconds=120 \
+  --set loadgen.timeoutSeconds=60
+```
+
+### Troubleshooting Kubernetes Deployment
+
+**Issue: Job fails with "No successful requests"**
+- **Check AIM endpoint accessibility:** Verify the `aim.baseUrl` is correct and reachable from within the cluster
+- **Check network policies:** Ensure pods can reach the AIM endpoint
+- **Check timeout:** Increase `loadgen.timeoutSeconds` if AIM responses are slow
+- **Check logs:** `kubectl -n reachy-demo logs job/reachy-demo-loadgen-manual` for detailed errors
+
+**Issue: "Connection refused" or timeout errors**
+- **For remote Docker deployment:** Ensure the AIM endpoint is accessible from cluster nodes (check firewall, network routing)
+- **For Kubernetes Service:** Verify the Service exists and has correct selectors: `kubectl get svc -n <aim-namespace>`
+- **Test connectivity:** Run a test pod: `kubectl run -it --rm test-pod --image=curlimages/curl --restart=Never -- curl http://aim.default.svc.cluster.local:8000/health`
+
+**Issue: CronJob not running**
+- **Check schedule:** Verify the cron schedule is correct: `kubectl -n reachy-demo get cronjob -o yaml`
+- **Check CronJob status:** `kubectl -n reachy-demo describe cronjob reachy-demo-addons-loadgen`
+- **Check recent jobs:** `kubectl -n reachy-demo get jobs`
+
+**Issue: ConfigMap not found**
+- **Verify ConfigMap exists:** `kubectl -n reachy-demo get configmap reachy-demo-addons-prompts`
+- **Check volume mount:** Verify the volume mount in the CronJob template matches the ConfigMap name
 
 ## Project Structure
 

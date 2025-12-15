@@ -64,6 +64,24 @@ The load generator uses the same environment variable names as the edge client f
 - `AIM_CHAT_PATH` - Chat completions path (default: `/v1/chat/completions`)
 - `AIM_MODEL` - Model name (default: `llm-prod`)
 - `AIM_API_KEY` - Optional API key (from Secret if enabled)
+- `TIMEOUT_SECONDS` - Request timeout in seconds (default: `30`, matches edge client default of 30000ms)
 
 This ensures the same configuration works for both edge client and cluster load generator.
+
+## Load Generator Configuration
+
+The load generator supports the following configuration options:
+
+- `loadgen.timeoutSeconds` - Request timeout in seconds (default: `30`)
+  - Increase this if your AIM endpoint takes longer than 30 seconds to respond
+  - Should match or exceed your AIM endpoint's typical response time
+- `loadgen.concurrency` - Number of concurrent workers (default: `8`)
+- `loadgen.durationSeconds` - Test duration in seconds (default: `60`)
+- `loadgen.qpsPerWorker` - Requests per second per worker (default: `1`)
+- `loadgen.schedule` - Cron schedule for automatic runs (default: `*/30 * * * *`)
+
+The load generator tracks and reports:
+- Successful request count
+- Error count (timeouts, connection errors, HTTP errors)
+- Latency statistics (p50, p95, mean)
 

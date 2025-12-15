@@ -26,6 +26,7 @@ loadgen:
   durationSeconds: 60
   concurrency: 8
   qpsPerWorker: 1
+  timeoutSeconds: 30  # Request timeout in seconds (default 30s, matches edge client default)
   promptSet:
     - "Explain why HBM capacity matters for LLM inference in 4 sentences."
     - "Summarize what Kubernetes-native inference means."
