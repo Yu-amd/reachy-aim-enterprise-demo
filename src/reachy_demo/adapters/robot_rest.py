@@ -92,26 +92,70 @@ class ReachyDaemonREST(RobotAdapter):
             try:
                 self._tts_engine = pyttsx3.init()
                 # Slower rate for clearer speech (default is usually 200, 100-110 is more natural)
-                self._tts_engine.setProperty('rate', 110)  # Speed (words per minute) - slower for clarity
+                self._tts_engine.setProperty('rate', 200)  # Speed (words per minute) - default speed
                 self._tts_engine.setProperty('volume', 1.0)  # Volume (0.0 to 1.0) - max volume
                 # Try to set a better voice if available
                 voices = self._tts_engine.getProperty('voices')
                 if voices:
-                    # Prefer English voices, especially female voices which are often clearer
+                    selected_voice = None
+                    
+                    # First: Prefer British female voices
                     for voice in voices:
-                        voice_name = voice.name.lower()
-                        voice_id = voice.id.lower()
-                        if ('english' in voice_name or 'en' in voice_id) and ('female' in voice_name or 'f' in voice_id):
-                            self._tts_engine.setProperty('voice', voice.id)
-                            logger.debug(f"Using voice: {voice.name}")
+                        voice_name_lower = voice.name.lower()
+                        voice_id_lower = voice.id.lower()
+                        # Explicitly avoid Chinese voices
+                        if any(x in voice_name_lower or x in voice_id_lower for x in ['chinese', 'zh', 'cn', 'mandarin', 'cantonese']):
+                            continue
+                        # Look for British voices (prioritize British over other English accents)
+                        if (any(x in voice_name_lower or x in voice_id_lower for x in ['british', 'uk', 'gb', 'england', 'english_gb', 'en_gb', 'english-uk']) and 
+                            ('female' in voice_name_lower or 'f' in voice_id_lower)):
+                            selected_voice = voice
                             break
-                    else:
-                        # Fallback to any English voice
+                    
+                    # Second: British male voices
+                    if selected_voice is None:
                         for voice in voices:
-                            if 'english' in voice.name.lower() or 'en' in voice.id.lower():
-                                self._tts_engine.setProperty('voice', voice.id)
-                                logger.debug(f"Using voice: {voice.name}")
+                            voice_name_lower = voice.name.lower()
+                            voice_id_lower = voice.id.lower()
+                            # Explicitly avoid Chinese voices
+                            if any(x in voice_name_lower or x in voice_id_lower for x in ['chinese', 'zh', 'cn', 'mandarin', 'cantonese']):
+                                continue
+                            # Look for British voices
+                            if any(x in voice_name_lower or x in voice_id_lower for x in ['british', 'uk', 'gb', 'england', 'english_gb', 'en_gb', 'english-uk']):
+                                selected_voice = voice
                                 break
+                    
+                    # Third: Other English voices (avoid Irish/American if possible, but prefer over non-English)
+                    if selected_voice is None:
+                        for voice in voices:
+                            voice_name_lower = voice.name.lower()
+                            voice_id_lower = voice.id.lower()
+                            # Explicitly avoid Chinese voices
+                            if any(x in voice_name_lower or x in voice_id_lower for x in ['chinese', 'zh', 'cn', 'mandarin', 'cantonese']):
+                                continue
+                            # Avoid Irish if we can find other English
+                            if 'irish' in voice_name_lower or 'ie' in voice_id_lower:
+                                continue
+                            # Look for English indicators
+                            if ('english' in voice_name_lower or 'en' in voice_id_lower):
+                                selected_voice = voice
+                                break
+                    
+                    # Fourth: Use first non-Chinese voice if no English found
+                    if selected_voice is None:
+                        for voice in voices:
+                            voice_name_lower = voice.name.lower()
+                            voice_id_lower = voice.id.lower()
+                            # Explicitly avoid Chinese voices
+                            if not any(x in voice_name_lower or x in voice_id_lower for x in ['chinese', 'zh', 'cn', 'mandarin', 'cantonese']):
+                                selected_voice = voice
+                                break
+                    
+                    if selected_voice:
+                        self._tts_engine.setProperty('voice', selected_voice.id)
+                        logger.info(f"✓ TTS: Using British English voice: {selected_voice.name} (ID: {selected_voice.id})")
+                    else:
+                        logger.warning("⚠ TTS: No suitable English voice found, using default")
                 self._tts_method = "system"
                 logger.info("✓ TTS: Using system TTS (pyttsx3) - daemon API not available")
             except Exception as e:
@@ -449,7 +493,7 @@ class ReachyDaemonREST(RobotAdapter):
             if PYTTSX3_AVAILABLE and self._tts_engine is None:
                 try:
                     self._tts_engine = pyttsx3.init()
-                    self._tts_engine.setProperty('rate', 120)  # Slower for clarity
+                    self._tts_engine.setProperty('rate', 200)  # Default speed
                     self._tts_engine.setProperty('volume', 1.0)
                 except Exception:
                     pass
@@ -474,30 +518,74 @@ class ReachyDaemonREST(RobotAdapter):
                 engine = pyttsx3.init()
                 logger.info(f"TTS engine initialized: {engine}")
                 
-                # Slower rate for clearer speech (100-110 is more natural, 120 is still readable)
-                engine.setProperty('rate', 110)  # Slower for clarity
+                # Default speech rate (200 WPM is typical default)
+                engine.setProperty('rate', 200)  # Default speed
                 # Set volume to maximum (1.0 = 100%)
                 engine.setProperty('volume', 1.0)  # Max volume
                 logger.info(f"TTS properties - rate: {engine.getProperty('rate')}, volume: {engine.getProperty('volume')}")
                 
-                # Try to set a better voice
+                # Try to set a British English voice explicitly (avoid Chinese, prefer British over Irish/American)
                 voices = engine.getProperty('voices')
                 if voices:
-                    # Prefer female English voices for clarity
+                    selected_voice = None
+                    
+                    # First: Prefer British female voices
                     for voice in voices:
-                        voice_name = voice.name.lower()
-                        voice_id = voice.id.lower()
-                        if ('english' in voice_name or 'en' in voice_id) and ('female' in voice_name or 'f' in voice_id):
-                            engine.setProperty('voice', voice.id)
-                            logger.info(f"Using voice: {voice.name}")
+                        voice_name_lower = voice.name.lower()
+                        voice_id_lower = voice.id.lower()
+                        # Explicitly avoid Chinese voices
+                        if any(x in voice_name_lower or x in voice_id_lower for x in ['chinese', 'zh', 'cn', 'mandarin', 'cantonese']):
+                            continue
+                        # Look for British voices (prioritize British over other English accents)
+                        if (any(x in voice_name_lower or x in voice_id_lower for x in ['british', 'uk', 'gb', 'england', 'english_gb', 'en_gb', 'english-uk']) and 
+                            ('female' in voice_name_lower or 'f' in voice_id_lower)):
+                            selected_voice = voice
                             break
-                    else:
-                        # Fallback to any English voice
+                    
+                    # Second: British male voices
+                    if selected_voice is None:
                         for voice in voices:
-                            if 'english' in voice.name.lower() or 'en' in voice.id.lower():
-                                engine.setProperty('voice', voice.id)
-                                logger.info(f"Using voice: {voice.name}")
+                            voice_name_lower = voice.name.lower()
+                            voice_id_lower = voice.id.lower()
+                            # Explicitly avoid Chinese voices
+                            if any(x in voice_name_lower or x in voice_id_lower for x in ['chinese', 'zh', 'cn', 'mandarin', 'cantonese']):
+                                continue
+                            # Look for British voices
+                            if any(x in voice_name_lower or x in voice_id_lower for x in ['british', 'uk', 'gb', 'england', 'english_gb', 'en_gb', 'english-uk']):
+                                selected_voice = voice
                                 break
+                    
+                    # Third: Other English voices (avoid Irish/American if possible, but prefer over non-English)
+                    if selected_voice is None:
+                        for voice in voices:
+                            voice_name_lower = voice.name.lower()
+                            voice_id_lower = voice.id.lower()
+                            # Explicitly avoid Chinese voices
+                            if any(x in voice_name_lower or x in voice_id_lower for x in ['chinese', 'zh', 'cn', 'mandarin', 'cantonese']):
+                                continue
+                            # Avoid Irish if we can find other English
+                            if 'irish' in voice_name_lower or 'ie' in voice_id_lower:
+                                continue
+                            # Look for English indicators
+                            if ('english' in voice_name_lower or 'en' in voice_id_lower):
+                                selected_voice = voice
+                                break
+                    
+                    # Fourth: Use first non-Chinese voice if no English found
+                    if selected_voice is None:
+                        for voice in voices:
+                            voice_name_lower = voice.name.lower()
+                            voice_id_lower = voice.id.lower()
+                            # Explicitly avoid Chinese voices
+                            if not any(x in voice_name_lower or x in voice_id_lower for x in ['chinese', 'zh', 'cn', 'mandarin', 'cantonese']):
+                                selected_voice = voice
+                                break
+                    
+                    if selected_voice:
+                        engine.setProperty('voice', selected_voice.id)
+                        logger.info(f"✓ TTS: Using British English voice: {selected_voice.name} (ID: {selected_voice.id})")
+                    else:
+                        logger.warning("⚠ TTS: No suitable English voice found, using default")
                 
                 # Use the text as-is - espeak handles punctuation naturally
                 logger.info(f"TTS engine saying ({len(text)} chars): '{text[:100]}{'...' if len(text) > 100 else ''}'")

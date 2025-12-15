@@ -28,7 +28,7 @@ class Settings:
     aim_chat_path: str = "/v1/chat/completions"
     aim_model: str = "llm-prod"
     aim_api_key: str | None = None
-    aim_timeout_ms: int = 2200
+    aim_timeout_ms: int = 30000  # 30 seconds - local LLMs need more time
     aim_max_retries: int = 1
 
     # Reachy Mini daemon
@@ -49,7 +49,7 @@ def load_settings() -> Settings:
         aim_chat_path=_env("AIM_CHAT_PATH", "/v1/chat/completions") or "/v1/chat/completions",
         aim_model=_env("AIM_MODEL", "llm-prod") or "llm-prod",
         aim_api_key=_env("AIM_API_KEY", None),
-        aim_timeout_ms=_env_int("AIM_TIMEOUT_MS", 2200),
+        aim_timeout_ms=_env_int("AIM_TIMEOUT_MS", 30000),  # 30 seconds default
         aim_max_retries=_env_int("AIM_MAX_RETRIES", 1),
         reachy_daemon_url=_env("REACHY_DAEMON_URL", "http://127.0.0.1:8001") or "http://127.0.0.1:8001",
         robot_mode=_env("ROBOT_MODE", "sim") or "sim",

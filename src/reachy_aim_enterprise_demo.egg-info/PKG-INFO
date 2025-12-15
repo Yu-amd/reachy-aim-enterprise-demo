@@ -445,8 +445,22 @@ python -c "from reachy_demo.aim.client import AIMClient; from reachy_demo.orches
 - Solution: Make sure you've activated the virtual environment and run `pip install -e .`
 
 **Issue: "Connection refused" or timeout errors**
-- Solution: Verify your `AIM_BASE_URL` is correct and the endpoint is accessible
-- Check network connectivity: `curl $AIM_BASE_URL/health` (if health endpoint exists)
+- **Solution:** Verify your `AIM_BASE_URL` is correct and the endpoint is accessible
+- **Check network connectivity:**
+  ```bash
+  # Test if endpoint is reachable
+  curl $AIM_BASE_URL/health  # If health endpoint exists
+  
+  # For LMStudio, test the chat endpoint directly:
+  curl -X POST http://localhost:1234/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d '{"model": "test", "messages": [{"role": "user", "content": "hi"}]}'
+  ```
+- **LMStudio-specific:** 
+  - Ensure LMStudio server is running (check the LMStudio UI)
+  - Verify a model is loaded in LMStudio
+  - If using a network IP, check firewall settings
+  - LMStudio default port is 1234, but it may be different - check LMStudio settings
 
 **Issue: "Reachy daemon not reachable" warning**
 - This is expected if you're not running the daemon. The demo will continue without robot control.
@@ -488,15 +502,21 @@ python -c "from reachy_demo.aim.client import AIMClient; from reachy_demo.orches
   macOS and Windows have built-in TTS, so no additional install needed.
 
 **Issue: "Read timed out" or "AIM request failed after retries"**
-- **Cause:** The AIM endpoint is taking longer than the configured timeout to respond
+- **Cause:** The LLM endpoint is taking longer than the configured timeout to respond
+- **Common with local LLMs (Ollama, LMStudio):** Local models often need 10-60 seconds for inference, especially on first request
 - **Solution:** Increase `AIM_TIMEOUT_MS` in your `.env` file:
   ```bash
-  # Default is 2200ms (2.2 seconds)
-  # Increase for slower models or longer responses:
-  AIM_TIMEOUT_MS=30000  # 30 seconds
-  # Or even longer for complex prompts:
+  # Default is now 30000ms (30 seconds)
+  # For slower models or longer responses, increase further:
   AIM_TIMEOUT_MS=60000  # 60 seconds
+  # For very slow models or complex prompts:
+  AIM_TIMEOUT_MS=120000  # 2 minutes
   ```
+- **LMStudio-specific:**
+  - Ensure LMStudio server is running and a model is loaded
+  - Check that the server is accessible: `curl http://localhost:1234/v1/chat/completions`
+  - First request may be slower (model loading), subsequent requests should be faster
+  - If using LMStudio on a network IP (e.g., `192.168.1.131:1234`), ensure firewall allows connections
 - **Note:** Restart the application after changing the timeout value
 
 ## Cluster Deployment via Helm
