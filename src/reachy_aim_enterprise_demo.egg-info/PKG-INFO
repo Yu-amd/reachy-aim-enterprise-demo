@@ -11,10 +11,105 @@ Requires-Dist: typer>=0.12.3
 Requires-Dist: rich>=13.7.1
 Requires-Dist: pydantic>=2.7.0
 Requires-Dist: prometheus-client>=0.20.0
+Requires-Dist: pyttsx3>=2.90
 
 # Reachy Mini Lite + AMD Inference Microservice (AIM) Enterprise Demo
 
 This repo provides a **fully functional** enterprise demo that connects a Reachy Mini robot to an AIM (OpenAI-compatible) endpoint. You can run it **without the physical robot** using the Reachy Mini daemon simulation, while targeting a real **AIM OpenAI-compatible endpoint** (e.g., running on MI300X in your datacenter).
+
+## Architecture (Edge + Cluster)
+
+```
+Strix Halo Host (Edge)
+  ├── reachy-mini-daemon (sim now / hardware later)
+  └── reachy-demo client (this repo)
+        │
+        └── HTTP requests
+             │
+             v
+AIM Endpoint (OpenAI-compatible) on MI300X (Cluster)
+```
+
+**Data Flow:**
+1. User types prompt → Edge client (`reachy-demo`)
+2. Edge client → AIM endpoint (LLM inference)
+3. AIM response → Edge client
+4. Edge client → Reachy daemon (gestures + TTS)
+5. Robot performs gesture and speaks response
+
+## Demo Modes
+
+### Mode A (Recommended): Remote AIM Endpoint
+- **AIM runs in your cluster** (MI300X datacenter)
+- Edge client points to `AIM_BASE_URL` (e.g., via SSH port forward or ingress)
+- Reachy daemon runs locally on edge host (sim or hardware)
+- **Use case:** Production-like setup, real inference hardware
+
+### Mode B: Local LLM Endpoint
+- **Local LLM endpoint runs on the same host** as edge client
+- Supports OpenAI-compatible endpoints:
+  - **Ollama** (local LLM runner)
+  - **LMStudio** (local LLM GUI/server)
+  - **Custom OpenAI-compatible endpoint**
+- Both LLM endpoint and daemon need different ports (LLM: 8000, daemon: 8001)
+- **Note:** AIM (AMD Inference Microservice) requires Instinct GPU hardware and is not supported locally
+- **Use case:** Development, testing without cluster access, local experimentation
+
+### Mode C: Offline Stub (Future)
+- Run without LLM endpoint; prints canned responses
+- Useful for robot-only testing
+
+## Golden Path (No Robot Required)
+
+**Recommended setup** - avoids port conflicts:
+
+```bash
+# Setup (one time)
+make install
+cp .env.example .env
+# Edit .env: Set AIM_BASE_URL to your AIM endpoint
+
+# Terminal 1: Start Reachy daemon on port 8001 (avoids AIM port conflicts)
+make sim
+
+# Terminal 2: Run the demo
+make run
+```
+
+The `make sim` command automatically runs the daemon on port 8001, and `.env.example` is pre-configured to use `REACHY_DAEMON_URL=http://127.0.0.1:8001`.
+
+**Why port 8001?** Both AIM and Reachy daemon default to port 8000. Using 8001 for the daemon avoids conflicts when AIM is on 8000 (common with SSH port forwarding).
+
+## Quick Start (One Command Per Terminal)
+
+Same as the [Golden Path](#golden-path-no-robot-required) above:
+
+```bash
+# Setup (one time)
+make install
+cp .env.example .env
+# Edit .env and set AIM_BASE_URL to your AIM endpoint
+
+# Terminal 1: Start Reachy daemon simulation (port 8001)
+make sim
+
+# Terminal 2: Run the demo
+make run
+```
+
+That's it! The demo will connect to your AIM endpoint and control the simulated robot.
+
+**Note:** `make install` automatically creates the virtual environment and installs dependencies. If you prefer to do it separately: `make venv` then `make install`.
+
+## Demo Narrative
+
+This demo showcases an **enterprise edge-to-cloud AI architecture**:
+
+- **Reachy Mini** is the edge client (I/O interface) - handles user interaction and robot control
+- **AIM (AMD Inference Microservice)** is the inference API (OpenAI-compatible) - runs LLM inference in your datacenter
+- **Kubernetes add-ons** provide repeatability - load generator and Grafana dashboards for monitoring
+
+The architecture separates concerns: edge handles I/O and latency-sensitive robot control, while cloud handles compute-intensive LLM inference. This enables real-time robot interactions powered by large language models.
 
 ## What you get
 - **Edge client** (runs on your Strix Halo host): CLI orchestrator + AIM client + Prometheus metrics
@@ -33,6 +128,10 @@ This repo provides a **fully functional** enterprise demo that connects a Reachy
 - Access to an AIM (OpenAI-compatible) endpoint
 - (Optional) `helm` for Kubernetes deployment
 - (Optional) `reachy-mini[mujoco]` for local simulation testing
+- (Optional) System TTS backend for speech (automatically installed with Python dependencies):
+  - **Linux**: `espeak` or `espeak-ng` (usually pre-installed, or `sudo apt-get install espeak`)
+  - **macOS**: Built-in TTS (no additional install needed)
+  - **Windows**: SAPI5 (built-in, no additional install needed)
 
 ## Quick Start Guide
 
@@ -60,11 +159,13 @@ pip install -e .
 python -m reachy_demo.main --help
 ```
 
-### Step 2: Deploy AIM Endpoint (Docker)
+### Step 2: Deploy LLM Endpoint
 
-Before configuring the edge client, you need to deploy the AIM endpoint. This project uses the AIM endpoint from the [AIM-demo repository](https://github.com/Yu-amd/AIM-demo).
+Before configuring the edge client, you need an OpenAI-compatible LLM endpoint. Choose based on your setup:
 
-**Clone and deploy the AIM endpoint:**
+#### Option A: Remote AIM Endpoint (Mode A - Recommended)
+
+For production setups with Instinct GPU hardware, deploy AIM in your cluster:
 
 ```bash
 # Clone the AIM-demo repository
@@ -72,50 +173,55 @@ git clone https://github.com/Yu-amd/AIM-demo.git
 cd AIM-demo
 
 # Follow the Docker deployment instructions in that repository
-# Common deployment methods:
+# Deploy to cluster with Instinct GPUs (MI300X)
 ```
 
-**Option A: Using Docker Compose (if available)**
+**Note:** AIM (AMD Inference Microservice) requires Instinct GPU hardware and is typically deployed in a datacenter/cluster environment, not locally.
+
+**Verify the AIM endpoint:**
 ```bash
-docker-compose up -d
-```
-
-**Option B: Using Docker Run**
-```bash
-docker run -d \
-  --name aim-endpoint \
-  -p 8000:8000 \
-  <aim-image-name>
-```
-
-**Option C: Follow AIM-demo specific instructions**
-- Check the AIM-demo README for exact deployment commands
-- The repository may have specific requirements or setup scripts
-
-**Verify AIM endpoint is running:**
-
-```bash
-# Check health endpoint (if available)
+# If using SSH port forward: ssh -L 8000:localhost:8000 user@cluster-host
 curl http://127.0.0.1:8000/health
-
-# Check API documentation
 curl http://127.0.0.1:8000/docs
-
-# Test chat completions endpoint
-curl -X POST http://127.0.0.1:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "llm-prod",
-    "messages": [{"role": "user", "content": "Hello"}],
-    "max_tokens": 50
-  }'
 ```
 
-**Note:** For the most up-to-date deployment instructions, refer to the [AIM-demo repository README](https://github.com/Yu-amd/AIM-demo).
+#### Option B: Local LLM Endpoint (Mode B)
 
-**Alternative: Using existing AIM endpoint**
+For local development/testing without Instinct GPUs, use an OpenAI-compatible local LLM:
 
-If you already have an AIM endpoint running (e.g., in Kubernetes, cloud service, etc.), skip this step and proceed to Step 3. Just make sure to set `AIM_BASE_URL` in Step 3 to point to your existing endpoint.
+**Ollama:**
+```bash
+# Install Ollama: https://ollama.ai
+ollama serve  # Runs on http://localhost:11434 by default
+
+# Pull a model
+ollama pull llama2
+
+# Ollama uses /api/chat endpoint, configure AIM_BASE_URL=http://localhost:11434
+# and AIM_CHAT_PATH=/api/chat in .env
+```
+
+**LMStudio:**
+```bash
+# Install LMStudio: https://lmstudio.ai
+# Start LMStudio server (usually http://localhost:1234)
+# Configure AIM_BASE_URL=http://localhost:1234 in .env
+```
+
+**Custom OpenAI-compatible endpoint:**
+- Any endpoint that implements the OpenAI chat completions API
+- Set `AIM_BASE_URL` and `AIM_CHAT_PATH` accordingly
+
+**Verify local endpoint:**
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "llm-prod", "messages": [{"role": "user", "content": "Hello!"}], "max_tokens": 50}'
+```
+
+**Alternative: Using existing endpoint**
+
+If you already have an LLM endpoint running (AIM in cluster, Ollama locally, etc.), skip deployment and proceed to Step 3. Just make sure to set `AIM_BASE_URL` in Step 3 to point to your endpoint.
 
 ### Step 3: Configure environment variables
 
@@ -138,9 +244,8 @@ cp .env.example .env
   - For remote endpoint: `https://<your-ingress-host>`
   - For Kubernetes port-forward: `http://127.0.0.1:8000`
 - Set `REACHY_DAEMON_URL` - Reachy daemon URL
-  - Default: `http://127.0.0.1:8000`
-  - **If port 8000 is used for AIM (SSH forward), use a different port:** `http://127.0.0.1:8001`
-  - Then run daemon with: `reachy-mini-daemon --sim --headless --fastapi-port 8001`
+  - **Default (recommended):** `http://127.0.0.1:8001` (avoids AIM port conflicts)
+  - If you need port 8000, set to `http://127.0.0.1:8000` and ensure AIM uses a different port
 - (Optional) Adjust `AIM_MODEL` if different from `llm-prod`
 - (Optional) Set `AIM_API_KEY` if your endpoint requires authentication
 
@@ -155,15 +260,16 @@ source .venv/bin/activate
 # Install reachy-mini with mujoco support
 pip install "reachy-mini[mujoco]"
 
-# Install PortAudio system library (required for audio backend)
+# Install system libraries (if needed)
 # On Ubuntu/Debian:
-sudo apt-get update && sudo apt-get install -y portaudio19-dev
+sudo apt-get update && sudo apt-get install -y portaudio19-dev espeak
 
 # On Fedora/RHEL:
-# sudo dnf install portaudio-devel
+# sudo dnf install portaudio-devel espeak
 
 # On macOS (using Homebrew):
 # brew install portaudio
+# (TTS uses built-in macOS voices, no additional install needed)
 ```
 
 **Start the daemon in simulation mode:**
@@ -207,15 +313,49 @@ python -m reachy_demo.main
    - Send your prompt to the AIM endpoint
    - Display the model's response
    - Show latency metrics (AIM call time, end-to-end time, SLO status)
-   - Attempt to trigger a robot gesture (placeholder in sim mode)
+   - Trigger an expressive robot gesture based on the response content
+   - **Speak the response** using TTS (daemon API or system TTS)
 
 **Example interaction:**
 ```
 You> What is machine learning?
 [AIM response appears in a panel with latency metrics]
+[Robot performs a gesture - e.g., "thinking" for questions, "excited" for positive responses]
+[Robot speaks the response using TTS]
 ```
 
 **To exit:** Press `Ctrl+C`
+
+### Robot Gestures and Speech in Sim Mode
+
+The demo includes **fully implemented robot gestures and text-to-speech** that work in both simulation and hardware mode. Gestures are automatically selected based on the AIM response characteristics, and the robot will speak the AIM endpoint's responses.
+
+**Available Gestures:**
+- **`nod`** - Simple head nod (pitch down then back up)
+- **`excited`** - Antennas wiggle rapidly with head bobs (for positive/enthusiastic responses)
+- **`thinking`** - Head tilts side to side (for questions or processing)
+- **`greeting`** - Friendly nod with antennas raised (for short responses)
+- **`happy`** - Bouncy antennas with head bob (for fast, positive responses)
+- **`confused`** - Head shakes side to side (for uncertainty or longer responses)
+- **`wake_up`** - Wake up animation (uses daemon's built-in animation)
+- **`goto_sleep`** - Sleep animation (uses daemon's built-in animation)
+
+**Gesture Selection Logic:**
+- Questions (responses containing "?") → `thinking`
+- Positive keywords ("great", "excellent") → `excited`
+- Short responses (< 10 words) → `greeting`
+- Fast responses (< 500ms) → `happy`
+- Otherwise → Random selection from `nod`, `thinking`, `confused`
+
+All gestures use the Reachy Mini daemon's `/api/move/goto` endpoint to control head pose (pitch, yaw, roll), antennas, and body yaw. The gestures are smooth and expressive, making the robot interaction feel natural even in simulation mode.
+
+**Text-to-Speech:**
+- The robot will speak the AIM endpoint's responses automatically
+- TTS method is auto-detected: tries daemon API first (`/api/speak`, `/api/tts`, etc.), falls back to system TTS (pyttsx3)
+- **In sim mode:** Typically uses system TTS (pyttsx3) which plays through your computer's speakers
+- **In hardware mode:** Will use daemon API if available (robot's speakers), otherwise falls back to system TTS
+- System TTS works offline and cross-platform (Windows, Linux, macOS)
+- You'll see a startup message indicating which TTS method is being used (e.g., `✓ TTS: Using system TTS (pyttsx3)`)
 
 ### Step 6: (Optional) Check Prometheus metrics
 
@@ -290,6 +430,14 @@ python -c "from reachy_demo.aim.client import AIMClient; from reachy_demo.orches
 
 ### Troubleshooting
 
+**Issue: Port conflicts (both AIM and daemon on port 8000)**
+- **Problem:** Both AIM endpoint and Reachy daemon default to port 8000
+- **Solution:** Use the golden path configuration:
+  - Daemon on port 8001: `make sim` (automatically uses `--fastapi-port 8001`)
+  - `.env.example` is pre-configured with `REACHY_DAEMON_URL=http://127.0.0.1:8001`
+  - AIM endpoint stays on port 8000 (or your configured port)
+- **Manual override:** If you need different ports, update `REACHY_DAEMON_URL` in `.env` and run daemon with matching `--fastapi-port`
+
 **Issue: "AIM_BASE_URL is required"**
 - Solution: Make sure you've created `.env` from `.env.example` and set `AIM_BASE_URL`
 
@@ -321,6 +469,24 @@ python -c "from reachy_demo.aim.client import AIMClient; from reachy_demo.orches
   ```
 - **Solution 3:** Skip the daemon entirely - the demo works without it (you'll just see a warning)
 
+**Issue: TTS not working or "No module named 'pyttsx3'"**
+- **Solution:** Install Python dependencies:
+  ```bash
+  pip install -e .
+  ```
+  This will install `pyttsx3` automatically (it's in `pyproject.toml`)
+
+**Issue: TTS works but no sound (Linux)**
+- **Solution:** Install system TTS backend:
+  ```bash
+  # Ubuntu/Debian:
+  sudo apt-get install espeak
+  
+  # Fedora/RHEL:
+  sudo dnf install espeak
+  ```
+  macOS and Windows have built-in TTS, so no additional install needed.
+
 **Issue: "Read timed out" or "AIM request failed after retries"**
 - **Cause:** The AIM endpoint is taking longer than the configured timeout to respond
 - **Solution:** Increase `AIM_TIMEOUT_MS` in your `.env` file:
@@ -337,6 +503,13 @@ python -c "from reachy_demo.aim.client import AIMClient; from reachy_demo.orches
 
 This Helm chart is **not for installing a Kubernetes cluster** on your host.
 It installs **demo add-ons in your existing Kubernetes cluster** (loadgen, dashboard configmap).
+
+**Chart Mode: URL-only** - The chart uses `aim.baseUrl` to connect to your AIM endpoint. This can be:
+- A Kubernetes Service URL (e.g., `http://aim.default.svc.cluster.local:8000`)
+- An external URL (e.g., `https://aim.example.com`)
+- A port-forward URL (e.g., `http://localhost:8000`)
+
+The chart does **not** deploy or manage the AIM endpoint itself - it only configures the load generator and dashboards to connect to your existing AIM service.
 
 ### Prerequisites
 
@@ -437,14 +610,16 @@ reachy-aim-enterprise-demo/
 - Local and Kubernetes load generators
 - Helm charts for cluster deployment
 - Robot health checks and state queries
-- **Robot gestures** - Multiple expressive gestures implemented via `/api/move/goto` endpoint
+- **Robot gestures** - **Fully functional** gestures implemented via `/api/move/goto` endpoint
+  - Works in both simulation and hardware mode
   - Supports: `nod`, `excited`, `thinking`, `greeting`, `happy`, `confused`, `random`, `wake_up`, `goto_sleep`
   - Gestures are automatically selected based on response characteristics for more natural interactions
-
-⚠️ **Placeholders (intentional, documented):**
-- `speak()` method - No-op placeholder (waiting for TTS/audio integration)
-
-The `speak()` method is a safe no-op and won't cause errors. The code gracefully handles it.
+  - All gestures make real API calls to control head pose, antennas, and body movements
+- **Text-to-Speech (TTS)** - **Fully implemented** with automatic fallback
+  - Priority 1: Reachy daemon API (if `/api/speak` or similar endpoint available)
+  - Priority 2: System TTS (pyttsx3) - offline, cross-platform fallback
+  - Automatically detects available method at startup
+  - Robot will speak the AIM endpoint's responses
 
 ## Configuration Reference
 
@@ -458,7 +633,7 @@ The `speak()` method is a safe no-op and won't cause errors. The code gracefully
 | `AIM_API_KEY` | No | - | API key for authentication |
 | `AIM_TIMEOUT_MS` | No | `2200` | Request timeout in milliseconds (increase if getting timeout errors, e.g., `30000` for 30 seconds) |
 | `AIM_MAX_RETRIES` | No | `1` | Maximum retry attempts |
-| `REACHY_DAEMON_URL` | No | `http://127.0.0.1:8000` | Reachy Mini daemon URL |
+| `REACHY_DAEMON_URL` | No | `http://127.0.0.1:8001` | Reachy Mini daemon URL (default 8001 to avoid AIM port conflicts) |
 | `ROBOT_MODE` | No | `sim` | Robot mode: `sim` or `hardware` |
 | `E2E_SLO_MS` | No | `2500` | End-to-end SLO in milliseconds |
 | `EDGE_METRICS_HOST` | No | `127.0.0.1` | Metrics server host |
@@ -471,18 +646,22 @@ The `speak()` method is a safe no-op and won't cause errors. The code gracefully
    # Run daemon with serial port instead of simulation
    reachy-mini-daemon -p /dev/ttyUSB0  # or your serial port
    ```
+   The existing gesture implementation will work with the physical robot - no code changes needed!
 
 2. **Customize gestures (optional):**
-   - Current implementation includes: `nod`, `excited`, `thinking`, `greeting`, `happy`, `confused`, `random`
+   - All gestures are already implemented and working in sim mode
+   - Current gestures: `nod`, `excited`, `thinking`, `greeting`, `happy`, `confused`, `wake_up`, `goto_sleep`
    - Gestures automatically selected based on response content and timing
    - Add more gestures by extending `gesture()` method in `src/reachy_demo/adapters/robot_rest.py`
    - Use `/api/move/goto` for custom head/body/antenna movements
    - Use `/api/move/play/recorded-move-dataset/{dataset}/{move}` for pre-recorded gestures
-   - Modify `_select_gesture()` in `orchestrator/loop.py` to customize gesture selection logic
+   - Modify gesture selection logic in `orchestrator/loop.py` to customize when gestures are triggered
 
-3. **Implement speech:**
-   - Wire `speak()` method to TTS service or device audio
-   - Update `src/reachy_demo/adapters/robot_rest.py`
+3. **Customize speech (optional):**
+   - TTS is already implemented with daemon API + system TTS fallback
+   - Robot automatically speaks AIM responses
+   - To customize: see `docs/tts-implementation.md` for advanced options (cloud TTS, async, etc.)
+   - Current implementation: daemon API (if available) → system TTS (pyttsx3) fallback
 
 ## Additional Notes
 

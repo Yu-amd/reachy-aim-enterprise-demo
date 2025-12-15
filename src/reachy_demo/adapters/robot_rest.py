@@ -4,6 +4,8 @@ import requests
 import time
 import random
 import logging
+import threading
+import subprocess
 from typing import Dict, Any, Optional
 from .robot_base import RobotAdapter
 
@@ -89,8 +91,27 @@ class ReachyDaemonREST(RobotAdapter):
         if PYTTSX3_AVAILABLE:
             try:
                 self._tts_engine = pyttsx3.init()
-                self._tts_engine.setProperty('rate', 150)  # Speed (words per minute)
-                self._tts_engine.setProperty('volume', 0.8)  # Volume (0.0 to 1.0)
+                # Slower rate for clearer speech (default is usually 200, 100-110 is more natural)
+                self._tts_engine.setProperty('rate', 110)  # Speed (words per minute) - slower for clarity
+                self._tts_engine.setProperty('volume', 1.0)  # Volume (0.0 to 1.0) - max volume
+                # Try to set a better voice if available
+                voices = self._tts_engine.getProperty('voices')
+                if voices:
+                    # Prefer English voices, especially female voices which are often clearer
+                    for voice in voices:
+                        voice_name = voice.name.lower()
+                        voice_id = voice.id.lower()
+                        if ('english' in voice_name or 'en' in voice_id) and ('female' in voice_name or 'f' in voice_id):
+                            self._tts_engine.setProperty('voice', voice.id)
+                            logger.debug(f"Using voice: {voice.name}")
+                            break
+                    else:
+                        # Fallback to any English voice
+                        for voice in voices:
+                            if 'english' in voice.name.lower() or 'en' in voice.id.lower():
+                                self._tts_engine.setProperty('voice', voice.id)
+                                logger.debug(f"Using voice: {voice.name}")
+                                break
                 self._tts_method = "system"
                 logger.info("✓ TTS: Using system TTS (pyttsx3) - daemon API not available")
             except Exception as e:
@@ -396,7 +417,11 @@ class ReachyDaemonREST(RobotAdapter):
         The method is automatically detected at startup.
         """
         if not text or not text.strip():
+            logger.debug("TTS: Empty text, skipping")
             return
+        
+        # Log the full text being spoken for debugging
+        logger.info(f"🔊 TTS: Speaking full text ({len(text)} chars): '{text}'")
         
         # Check TTS availability if not already checked
         if not self._tts_checked:
@@ -407,7 +432,7 @@ class ReachyDaemonREST(RobotAdapter):
         elif self._tts_method == "system":
             self._speak_via_system(text)
         else:
-            logger.debug(f"🔊 TTS unavailable: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+            logger.warning(f"🔊 TTS unavailable: '{text[:50]}{'...' if len(text) > 50 else ''}'")
     
     def _speak_via_daemon(self, text: str) -> None:
         """Speak text via Reachy daemon API."""
@@ -424,8 +449,8 @@ class ReachyDaemonREST(RobotAdapter):
             if PYTTSX3_AVAILABLE and self._tts_engine is None:
                 try:
                     self._tts_engine = pyttsx3.init()
-                    self._tts_engine.setProperty('rate', 150)
-                    self._tts_engine.setProperty('volume', 0.8)
+                    self._tts_engine.setProperty('rate', 120)  # Slower for clarity
+                    self._tts_engine.setProperty('volume', 1.0)
                 except Exception:
                     pass
             if self._tts_engine is not None:
@@ -434,14 +459,55 @@ class ReachyDaemonREST(RobotAdapter):
                 logger.error("⚠ TTS failed: daemon error and system TTS not available")
     
     def _speak_via_system(self, text: str) -> None:
-        """Speak text via system TTS (pyttsx3)."""
+        """Speak text via system TTS (pyttsx3) - non-blocking."""
         if self._tts_engine is None:
-            logger.debug(f"🔊 System TTS unavailable: '{text[:50]}...'")
+            logger.warning(f"🔊 System TTS unavailable: '{text[:50]}...'")
             return
         
-        try:
-            logger.debug(f"🔊 Speaking via system TTS: '{text[:50]}{'...' if len(text) > 50 else ''}'")
-            self._tts_engine.say(text)
-            self._tts_engine.runAndWait()
-        except Exception as e:
-            logger.warning(f"⚠ System TTS error: {e}")
+        def _speak_async():
+            """Run TTS in background thread to avoid blocking."""
+            try:
+                logger.info(f"🔊 Speaking via system TTS ({len(text)} chars): '{text[:100]}{'...' if len(text) > 100 else ''}'")
+                
+                # Use pyttsx3 directly - it's more reliable and handles audio routing better
+                # Create a new engine instance for this thread (pyttsx3 is not thread-safe)
+                engine = pyttsx3.init()
+                logger.info(f"TTS engine initialized: {engine}")
+                
+                # Slower rate for clearer speech (100-110 is more natural, 120 is still readable)
+                engine.setProperty('rate', 110)  # Slower for clarity
+                # Set volume to maximum (1.0 = 100%)
+                engine.setProperty('volume', 1.0)  # Max volume
+                logger.info(f"TTS properties - rate: {engine.getProperty('rate')}, volume: {engine.getProperty('volume')}")
+                
+                # Try to set a better voice
+                voices = engine.getProperty('voices')
+                if voices:
+                    # Prefer female English voices for clarity
+                    for voice in voices:
+                        voice_name = voice.name.lower()
+                        voice_id = voice.id.lower()
+                        if ('english' in voice_name or 'en' in voice_id) and ('female' in voice_name or 'f' in voice_id):
+                            engine.setProperty('voice', voice.id)
+                            logger.info(f"Using voice: {voice.name}")
+                            break
+                    else:
+                        # Fallback to any English voice
+                        for voice in voices:
+                            if 'english' in voice.name.lower() or 'en' in voice.id.lower():
+                                engine.setProperty('voice', voice.id)
+                                logger.info(f"Using voice: {voice.name}")
+                                break
+                
+                # Use the text as-is - espeak handles punctuation naturally
+                logger.info(f"TTS engine saying ({len(text)} chars): '{text[:100]}{'...' if len(text) > 100 else ''}'")
+                engine.say(text)
+                logger.info("TTS engine.runAndWait() called - audio should be playing now...")
+                engine.runAndWait()
+                logger.info(f"✓ TTS playback completed for {len(text)} character text")
+            except Exception as e:
+                logger.error(f"⚠ System TTS error: {e}", exc_info=True)
+        
+        # Run TTS in background thread to avoid blocking the main loop
+        thread = threading.Thread(target=_speak_async, daemon=True)
+        thread.start()
