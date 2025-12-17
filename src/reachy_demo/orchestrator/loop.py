@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-import random
 from typing import List, Dict
 
 from rich.console import Console
@@ -11,38 +10,9 @@ from ..aim.client import AIMClient
 from ..obs.metrics import EDGE_E2E_MS, AIM_CALL_MS, REQUESTS, ERRORS, SLO_MISS
 from ..adapters.robot_base import RobotAdapter
 from .prompts import SYSTEM_PROMPT
+from .gesture_mapping import select_gesture
 
 console = Console()
-
-def _select_gesture(text: str, response_time_ms: float) -> str:
-    """Select an appropriate gesture based on response characteristics.
-    
-    Makes the robot more expressive by choosing gestures that match the response.
-    """
-    text_lower = text.lower()
-    
-    # Excited/enthusiastic responses
-    if any(word in text_lower for word in ["great", "excellent", "awesome", "wonderful", "amazing", "fantastic", "!"]):
-        return random.choice(["excited", "happy"])
-    
-    # Questions or uncertain responses
-    if "?" in text or any(word in text_lower for word in ["maybe", "perhaps", "might", "could", "uncertain"]):
-        return random.choice(["thinking", "confused"])
-    
-    # Short responses (likely quick confirmations)
-    if len(text.split()) < 10:
-        return random.choice(["nod", "greeting"])
-    
-    # Long responses (likely explanations)
-    if len(text.split()) > 30:
-        return random.choice(["thinking", "nod"])
-    
-    # Fast responses (likely confident)
-    if response_time_ms < 1000:
-        return random.choice(["happy", "excited", "nod"])
-    
-    # Default: random selection for variety
-    return random.choice(["nod", "excited", "thinking", "greeting", "happy"])
 
 def run_interactive_loop(
     aim: AIMClient,
@@ -84,8 +54,8 @@ def run_interactive_loop(
             convo.append({"role": "assistant", "content": text})
 
             try:
-                # Select gesture based on response characteristics for variety
-                gesture_name = _select_gesture(text, aim_ms)
+                # Select gesture using intuitive mapping system based on LLM response analysis
+                gesture_name = select_gesture(text, aim_ms)
                 robot.gesture(gesture_name)
                 robot.speak(text)
             except Exception:

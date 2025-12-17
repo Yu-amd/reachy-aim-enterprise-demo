@@ -184,6 +184,11 @@ class ReachyDaemonREST(RobotAdapter):
         - "greeting": Friendly nod with antennas raised
         - "happy": Bouncy antennas with head bob (positive response)
         - "confused": Head shakes side to side (uncertainty)
+        - "listening": Leans forward slightly with antennas perked (attentive)
+        - "agreeing": Multiple quick nods (emphatic agreement)
+        - "surprised": Head jerks back with antennas spread (surprise)
+        - "curious": Head tilts with slight body turn (inquisitive)
+        - "emphatic": Strong nod with body movement (emphasis)
         - "random": Randomly selects from available gestures
         - "wake_up": Wake up animation
         - "goto_sleep": Sleep animation
@@ -202,8 +207,18 @@ class ReachyDaemonREST(RobotAdapter):
                 self._happy_gesture()
             elif name == "confused":
                 self._confused_gesture()
+            elif name == "listening":
+                self._listening_gesture()
+            elif name == "agreeing":
+                self._agreeing_gesture()
+            elif name == "surprised":
+                self._surprised_gesture()
+            elif name == "curious":
+                self._curious_gesture()
+            elif name == "emphatic":
+                self._emphatic_gesture()
             elif name == "random":
-                gestures = ["nod", "excited", "thinking", "greeting", "happy"]
+                gestures = ["nod", "excited", "thinking", "greeting", "happy", "listening", "agreeing", "curious"]
                 self.gesture(random.choice(gestures))
             elif name == "wake_up":
                 self._post("/api/move/play/wake_up")
@@ -217,62 +232,42 @@ class ReachyDaemonREST(RobotAdapter):
             pass
 
     def _nod_gesture(self) -> None:
-        """Perform a head nod gesture by moving head pitch down and back up."""
+        """Perform a more engaging head nod gesture with smoother movement."""
         try:
-            # Get current head pose
             state = self.get_state()
             current_pose = state.get("head_pose", {})
-            
-            # Extract current pitch (or default to 0)
             current_pitch = current_pose.get("pitch", 0.0)
             
-            # Nod down: pitch -0.3 radians (~17 degrees down)
-            nod_down_pitch = current_pitch - 0.3
-            
-            # Nod up: pitch +0.2 radians (~11 degrees up from original)
-            nod_up_pitch = current_pitch + 0.2
-            
-            # Perform nod: down then up
-            # Down
+            # More pronounced nod: down then up with slight pause
+            # Down - smoother and more natural
             self._post("/api/move/goto", {
                 "head_pose": {
-                    "x": current_pose.get("x", 0.0),
-                    "y": current_pose.get("y", 0.0),
-                    "z": current_pose.get("z", 0.0),
-                    "roll": current_pose.get("roll", 0.0),
-                    "pitch": nod_down_pitch,
-                    "yaw": current_pose.get("yaw", 0.0),
+                    **current_pose,
+                    "pitch": current_pitch - 0.35,  # Slightly more pronounced
                 },
-                "duration": 0.3,  # 300ms to nod down
+                "duration": 0.25,  # Faster down movement
                 "interpolation": "minjerk"
             })
+            time.sleep(0.08)  # Brief pause at bottom
             
-            # Small delay
-            time.sleep(0.1)
-            
-            # Back up
+            # Up - energetic return
             self._post("/api/move/goto", {
                 "head_pose": {
-                    "x": current_pose.get("x", 0.0),
-                    "y": current_pose.get("y", 0.0),
-                    "z": current_pose.get("z", 0.0),
-                    "roll": current_pose.get("roll", 0.0),
-                    "pitch": nod_up_pitch,
-                    "yaw": current_pose.get("yaw", 0.0),
+                    **current_pose,
+                    "pitch": current_pitch + 0.15,  # Slight overshoot for natural feel
                 },
-                "duration": 0.3,  # 300ms to nod up
+                "duration": 0.25,
                 "interpolation": "minjerk"
             })
+            time.sleep(0.05)
             
-            # Return to original position
-            time.sleep(0.1)
+            # Smooth return to neutral
             self._post("/api/move/goto", {
                 "head_pose": current_pose,
-                "duration": 0.2,  # 200ms to return
+                "duration": 0.2,
                 "interpolation": "minjerk"
             })
         except Exception:
-            # Fail silently if gesture fails
             pass
 
     def _move_to_pose(self, head_pose: Dict[str, float] = None, antennas: list = None, 
@@ -291,108 +286,240 @@ class ReachyDaemonREST(RobotAdapter):
             self._post("/api/move/goto", payload)
 
     def _excited_gesture(self) -> None:
-        """Excited gesture: antennas wiggle rapidly with head bobs."""
+        """Enhanced excited gesture: more dynamic antennas wiggle with energetic head bobs and body movement."""
         try:
             state = self.get_state()
             current_pose = state.get("head_pose", {})
             current_antennas = state.get("antennas_position", [0.0, 0.0])
+            current_body_yaw = state.get("body_yaw", 0.0)
             
-            # Quick head bob up
+            # Energetic head bob up with slight body turn
             self._move_to_pose(
-                head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) + 0.2},
+                head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) + 0.25},
+                body_yaw=current_body_yaw + 0.1,
+                duration=0.12
+            )
+            time.sleep(0.08)
+            
+            # Rapid antennas wiggle (4 movements for more energy)
+            for i in range(4):
+                # Antennas spread wide
+                self._move_to_pose(
+                    antennas=[0.4, -0.4],
+                    duration=0.08
+                )
+                time.sleep(0.03)
+                # Antennas cross
+                self._move_to_pose(
+                    antennas=[-0.3, 0.3],
+                    duration=0.08
+                )
+                time.sleep(0.03)
+            
+            # Head bob down with body return
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) - 0.12},
+                body_yaw=current_body_yaw - 0.05,
                 duration=0.15
             )
-            time.sleep(0.1)
+            time.sleep(0.08)
             
-            # Antennas wiggle (3 quick movements)
-            for i in range(3):
-                # Antennas spread
-                self._move_to_pose(
-                    antennas=[0.3, -0.3],
-                    duration=0.1
-                )
-                time.sleep(0.05)
-                # Antennas together
-                self._move_to_pose(
-                    antennas=[-0.2, 0.2],
-                    duration=0.1
-                )
-                time.sleep(0.05)
-            
-            # Head bob down then return
+            # Bounce back up
             self._move_to_pose(
-                head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) - 0.15},
-                duration=0.2
+                head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) + 0.1},
+                duration=0.12
             )
-            time.sleep(0.1)
+            time.sleep(0.05)
             
             # Return to original
             self._move_to_pose(
                 head_pose=current_pose,
                 antennas=current_antennas,
+                body_yaw=current_body_yaw,
                 duration=0.2
             )
         except Exception:
             pass
 
     def _thinking_gesture(self) -> None:
-        """Thinking gesture: head tilts side to side (like thinking)."""
+        """Enhanced thinking gesture: more expressive head tilts with slight body movement."""
         try:
             state = self.get_state()
             current_pose = state.get("head_pose", {})
             current_yaw = current_pose.get("yaw", 0.0)
+            current_body_yaw = state.get("body_yaw", 0.0)
             
-            # Tilt right
+            # Tilt right with slight body turn
             self._move_to_pose(
-                head_pose={**current_pose, "yaw": current_yaw + 0.25, "roll": 0.1},
-                duration=0.3
+                head_pose={**current_pose, "yaw": current_yaw + 0.3, "roll": 0.12, "pitch": current_pose.get("pitch", 0.0) - 0.05},
+                body_yaw=current_body_yaw + 0.08,
+                duration=0.25
             )
-            time.sleep(0.2)
+            time.sleep(0.25)
             
-            # Tilt left
+            # Tilt left with opposite body turn
             self._move_to_pose(
-                head_pose={**current_pose, "yaw": current_yaw - 0.25, "roll": -0.1},
-                duration=0.3
+                head_pose={**current_pose, "yaw": current_yaw - 0.3, "roll": -0.12, "pitch": current_pose.get("pitch", 0.0) - 0.05},
+                body_yaw=current_body_yaw - 0.08,
+                duration=0.25
             )
-            time.sleep(0.2)
+            time.sleep(0.25)
+            
+            # One more tilt right (like deep thinking)
+            self._move_to_pose(
+                head_pose={**current_pose, "yaw": current_yaw + 0.2, "roll": 0.08},
+                duration=0.2
+            )
+            time.sleep(0.15)
             
             # Return to center
             self._move_to_pose(
                 head_pose=current_pose,
+                body_yaw=current_body_yaw,
                 duration=0.3
             )
         except Exception:
             pass
 
     def _greeting_gesture(self) -> None:
-        """Greeting gesture: friendly nod with antennas raised."""
+        """Enhanced greeting gesture: more welcoming nod with antennas raised and slight body movement."""
+        try:
+            state = self.get_state()
+            current_pose = state.get("head_pose", {})
+            current_antennas = state.get("antennas_position", [0.0, 0.0])
+            current_body_yaw = state.get("body_yaw", 0.0)
+            
+            # Raise antennas with slight body turn (welcoming)
+            self._move_to_pose(
+                antennas=[0.45, 0.45],
+                body_yaw=current_body_yaw + 0.1,
+                duration=0.2
+            )
+            time.sleep(0.1)
+            
+            # Nod down (respectful greeting)
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) - 0.28},
+                duration=0.22
+            )
+            time.sleep(0.15)
+            
+            # Nod up with body return (friendly)
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) + 0.18},
+                body_yaw=current_body_yaw - 0.05,
+                duration=0.22
+            )
+            time.sleep(0.1)
+            
+            # Hold antennas up briefly
+            time.sleep(0.1)
+            
+            # Return to original
+            self._move_to_pose(
+                head_pose=current_pose,
+                antennas=current_antennas,
+                body_yaw=current_body_yaw,
+                duration=0.3
+            )
+        except Exception:
+            pass
+
+    def _happy_gesture(self) -> None:
+        """Enhanced happy gesture: more bouncy antennas with energetic head bobs."""
+        try:
+            state = self.get_state()
+            current_pose = state.get("head_pose", {})
+            current_antennas = state.get("antennas_position", [0.0, 0.0])
+            current_body_yaw = state.get("body_yaw", 0.0)
+            
+            # More bouncy movements (3 cycles for more energy)
+            for i in range(3):
+                # Head up with antennas raised and slight body turn
+                self._move_to_pose(
+                    head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) + 0.18},
+                    antennas=[0.35, 0.35],
+                    body_yaw=current_body_yaw + (0.05 if i % 2 == 0 else -0.05),
+                    duration=0.12
+                )
+                time.sleep(0.08)
+                # Head down with antennas lower
+                self._move_to_pose(
+                    head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) - 0.12},
+                    antennas=[0.15, 0.15],
+                    duration=0.12
+                )
+                time.sleep(0.08)
+            
+            # Final bounce up
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) + 0.1},
+                antennas=[0.25, 0.25],
+                duration=0.1
+            )
+            time.sleep(0.05)
+            
+            # Return to original
+            self._move_to_pose(
+                head_pose=current_pose,
+                antennas=current_antennas,
+                body_yaw=current_body_yaw,
+                duration=0.2
+            )
+        except Exception:
+            pass
+
+    def _confused_gesture(self) -> None:
+        """Enhanced confused gesture: more pronounced head shake with slight tilt."""
+        try:
+            state = self.get_state()
+            current_pose = state.get("head_pose", {})
+            current_yaw = current_pose.get("yaw", 0.0)
+            
+            # More pronounced shake: right-left-right-left with slight roll
+            shake_pattern = [
+                (0.35, 0.08),   # Right with slight tilt
+                (-0.35, -0.08),  # Left with opposite tilt
+                (0.25, 0.05),   # Right again
+                (-0.25, -0.05),  # Left again
+            ]
+            
+            for yaw_offset, roll_offset in shake_pattern:
+                self._move_to_pose(
+                    head_pose={
+                        **current_pose,
+                        "yaw": current_yaw + yaw_offset,
+                        "roll": current_pose.get("roll", 0.0) + roll_offset
+                    },
+                    duration=0.12
+                )
+                time.sleep(0.08)
+            
+            # Return to center with slight pause
+            time.sleep(0.1)
+            self._move_to_pose(
+                head_pose=current_pose,
+                duration=0.25
+            )
+        except Exception:
+            pass
+
+    def _listening_gesture(self) -> None:
+        """Listening gesture: leans forward slightly with antennas perked up (attentive posture)."""
         try:
             state = self.get_state()
             current_pose = state.get("head_pose", {})
             current_antennas = state.get("antennas_position", [0.0, 0.0])
             
-            # Raise antennas
+            # Lean forward (pitch down slightly) with antennas perked
             self._move_to_pose(
-                antennas=[0.4, 0.4],
-                duration=0.2
+                head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) - 0.15},
+                antennas=[0.25, 0.25],  # Antennas perked up
+                duration=0.3
             )
-            time.sleep(0.1)
+            time.sleep(0.4)  # Hold attentive pose
             
-            # Nod down
-            self._move_to_pose(
-                head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) - 0.25},
-                duration=0.25
-            )
-            time.sleep(0.15)
-            
-            # Nod up
-            self._move_to_pose(
-                head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) + 0.15},
-                duration=0.25
-            )
-            time.sleep(0.1)
-            
-            # Return to original
+            # Return to neutral
             self._move_to_pose(
                 head_pose=current_pose,
                 antennas=current_antennas,
@@ -401,56 +528,128 @@ class ReachyDaemonREST(RobotAdapter):
         except Exception:
             pass
 
-    def _happy_gesture(self) -> None:
-        """Happy gesture: bouncy antennas with head bob."""
+    def _agreeing_gesture(self) -> None:
+        """Agreeing gesture: multiple quick nods (emphatic agreement)."""
         try:
             state = self.get_state()
             current_pose = state.get("head_pose", {})
-            current_antennas = state.get("antennas_position", [0.0, 0.0])
+            current_pitch = current_pose.get("pitch", 0.0)
             
-            # Head up, antennas bounce
-            for i in range(2):
+            # Three quick nods
+            for _ in range(3):
+                # Nod down
                 self._move_to_pose(
-                    head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) + 0.15},
-                    antennas=[0.3, 0.3],
+                    head_pose={**current_pose, "pitch": current_pitch - 0.25},
+                    duration=0.15
+                )
+                time.sleep(0.05)
+                # Nod up
+                self._move_to_pose(
+                    head_pose={**current_pose, "pitch": current_pitch + 0.1},
                     duration=0.15
                 )
                 time.sleep(0.1)
-                self._move_to_pose(
-                    head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) - 0.1},
-                    antennas=[0.1, 0.1],
-                    duration=0.15
-                )
-                time.sleep(0.1)
             
-            # Return to original
+            # Return to neutral
             self._move_to_pose(
                 head_pose=current_pose,
-                antennas=current_antennas,
                 duration=0.2
             )
         except Exception:
             pass
 
-    def _confused_gesture(self) -> None:
-        """Confused gesture: head shakes side to side."""
+    def _surprised_gesture(self) -> None:
+        """Surprised gesture: head jerks back with antennas spread wide."""
         try:
             state = self.get_state()
             current_pose = state.get("head_pose", {})
-            current_yaw = current_pose.get("yaw", 0.0)
+            current_antennas = state.get("antennas_position", [0.0, 0.0])
             
-            # Shake right-left-right
-            for yaw_offset in [0.3, -0.3, 0.2, -0.2]:
-                self._move_to_pose(
-                    head_pose={**current_pose, "yaw": current_yaw + yaw_offset},
-                    duration=0.15
-                )
-                time.sleep(0.1)
+            # Quick head jerk back with antennas spread
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) + 0.3},
+                antennas=[0.5, -0.5],  # Antennas spread wide
+                duration=0.15
+            )
+            time.sleep(0.2)  # Hold surprised pose
             
-            # Return to center
+            # Return to neutral
             self._move_to_pose(
                 head_pose=current_pose,
+                antennas=current_antennas,
+                duration=0.25
+            )
+        except Exception:
+            pass
+
+    def _curious_gesture(self) -> None:
+        """Curious gesture: head tilts with slight body turn (inquisitive posture)."""
+        try:
+            state = self.get_state()
+            current_pose = state.get("head_pose", {})
+            current_body_yaw = state.get("body_yaw", 0.0)
+            
+            # Head tilt right with body turn
+            self._move_to_pose(
+                head_pose={
+                    **current_pose,
+                    "yaw": current_pose.get("yaw", 0.0) + 0.2,
+                    "roll": current_pose.get("roll", 0.0) + 0.15
+                },
+                body_yaw=current_body_yaw + 0.15,
+                duration=0.3
+            )
+            time.sleep(0.3)
+            
+            # Slight adjustment (like thinking)
+            self._move_to_pose(
+                head_pose={
+                    **current_pose,
+                    "yaw": current_pose.get("yaw", 0.0) - 0.15,
+                    "roll": current_pose.get("roll", 0.0) - 0.1
+                },
+                duration=0.25
+            )
+            time.sleep(0.2)
+            
+            # Return to neutral
+            self._move_to_pose(
+                head_pose=current_pose,
+                body_yaw=current_body_yaw,
+                duration=0.3
+            )
+        except Exception:
+            pass
+
+    def _emphatic_gesture(self) -> None:
+        """Emphatic gesture: strong nod with body movement (emphasis)."""
+        try:
+            state = self.get_state()
+            current_pose = state.get("head_pose", {})
+            current_body_yaw = state.get("body_yaw", 0.0)
+            current_pitch = current_pose.get("pitch", 0.0)
+            
+            # Strong nod down with body lean
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pitch - 0.4},
+                body_yaw=current_body_yaw + 0.1,
                 duration=0.2
+            )
+            time.sleep(0.1)
+            
+            # Strong return up with body return
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pitch + 0.2},
+                body_yaw=current_body_yaw - 0.05,
+                duration=0.2
+            )
+            time.sleep(0.1)
+            
+            # Final return to neutral
+            self._move_to_pose(
+                head_pose=current_pose,
+                body_yaw=current_body_yaw,
+                duration=0.25
             )
         except Exception:
             pass
@@ -507,7 +706,11 @@ class ReachyDaemonREST(RobotAdapter):
                 logger.error("⚠ TTS failed: daemon error and system TTS not available")
     
     def _speak_via_system(self, text: str) -> None:
-        """Speak text via system TTS (pyttsx3) - non-blocking."""
+        """Speak text via system TTS (pyttsx3) - non-blocking.
+        
+        Note: Audio plays on laptop speakers, not robot speakers.
+        The Reachy Mini daemon does not have TTS endpoints.
+        """
         if self._tts_engine is None:
             logger.warning(f"🔊 System TTS unavailable: '{text[:50]}...'")
             return
@@ -527,10 +730,24 @@ class ReachyDaemonREST(RobotAdapter):
                 
                 logger.info(f"🔊 Speaking via system TTS ({len(input_text)} chars): '{input_text[:100]}{'...' if len(input_text) > 100 else ''}'")
                 
-                # Use pyttsx3 directly - it's more reliable and handles audio routing better
+                # Use pyttsx3 with thread lock to prevent crashes from multiple engine instances
                 # Create a new engine instance for this thread (pyttsx3 is not thread-safe)
-                engine = pyttsx3.init()
-                logger.info(f"TTS engine initialized: {engine}")
+                # Use a simple approach to avoid voice list exhaustion issues
+                try:
+                    engine = pyttsx3.init()
+                except Exception as init_error:
+                    logger.error(f"⚠ Failed to initialize TTS engine: {init_error}")
+                    # Fallback to espeak directly
+                    try:
+                        import subprocess
+                        cleaned_text = re.sub(r'\s+', ' ', input_text.strip())
+                        subprocess.run(['espeak', '-s', '175', '-a', '150', cleaned_text],
+                                     timeout=30, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        logger.info(f"✓ TTS completed via espeak fallback")
+                        return
+                    except Exception:
+                        logger.error("⚠ All TTS methods failed")
+                        return
                 
                 # Default speech rate (200 WPM is typical default)
                 engine.setProperty('rate', 200)  # Default speed
