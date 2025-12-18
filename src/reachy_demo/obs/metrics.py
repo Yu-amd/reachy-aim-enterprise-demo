@@ -19,6 +19,12 @@ AIM_CALL_MS = Histogram(
 REQUESTS = Counter("edge_requests_total", "Total requests handled by edge client")
 ERRORS = Counter("edge_errors_total", "Total errors in edge client")
 SLO_MISS = Counter("edge_slo_miss_total", "Count of e2e latency SLO misses")
+BACKEND_FAILURES = Counter("backend_failures_total", "Total backend/inference failures")
+GESTURE_SELECTED = Counter(
+    "gesture_selected_total",
+    "Total gestures selected by latency policy",
+    ["gesture"]
+)
 
 def _is_port_in_use(port: int, host: str = '0.0.0.0') -> bool:
     """Check if a port is already in use on the specified host."""

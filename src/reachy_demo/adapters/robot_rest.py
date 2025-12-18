@@ -178,6 +178,15 @@ class ReachyDaemonREST(RobotAdapter):
         """Execute a robot gesture.
         
         Fully implemented gestures (work in sim and hardware mode):
+        
+        Latency-aware gestures (enterprise-responsive):
+        - "ack": Quick acknowledgment nod (immediate feedback)
+        - "nod_fast": Fast nod for quick responses (<800ms)
+        - "nod_tilt": Nod with head tilt for normal responses (800-2500ms)
+        - "thinking_done": Thinking gesture for slow responses (>2500ms)
+        - "error": Error gesture for failures (shake/no)
+        
+        Expressive gestures (content-aware):
         - "nod": Simple head nod (pitch down then back up)
         - "excited": Antennas wiggle with head bobs (energetic response)
         - "thinking": Head tilts side to side (processing/thinking)
@@ -195,7 +204,19 @@ class ReachyDaemonREST(RobotAdapter):
         """
         logger.debug(f"🤖 Gesture (implemented): {name}")
         try:
-            if name == "nod":
+            # Latency-aware gestures (enterprise-responsive)
+            if name == "ack":
+                self._ack_gesture()
+            elif name == "nod_fast":
+                self._nod_fast_gesture()
+            elif name == "nod_tilt":
+                self._nod_tilt_gesture()
+            elif name == "thinking_done":
+                self._thinking_done_gesture()
+            elif name == "error":
+                self._error_gesture()
+            # Expressive gestures (content-aware)
+            elif name == "nod":
                 self._nod_gesture()
             elif name == "excited":
                 self._excited_gesture()
@@ -649,6 +670,155 @@ class ReachyDaemonREST(RobotAdapter):
             self._move_to_pose(
                 head_pose=current_pose,
                 body_yaw=current_body_yaw,
+                duration=0.25
+            )
+        except Exception:
+            pass
+
+    def _ack_gesture(self) -> None:
+        """Acknowledgment gesture: very quick nod for immediate feedback (<100ms)."""
+        try:
+            state = self.get_state()
+            current_pose = state.get("head_pose", {})
+            current_pitch = current_pose.get("pitch", 0.0)
+            
+            # Very quick, small nod down
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pitch - 0.15},
+                duration=0.08  # Very fast
+            )
+            time.sleep(0.02)
+            
+            # Quick return
+            self._move_to_pose(
+                head_pose=current_pose,
+                duration=0.08
+            )
+        except Exception:
+            pass
+
+    def _nod_fast_gesture(self) -> None:
+        """Fast nod gesture: quick nod for fast responses (<800ms)."""
+        try:
+            state = self.get_state()
+            current_pose = state.get("head_pose", {})
+            current_pitch = current_pose.get("pitch", 0.0)
+            
+            # Quick nod down
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pitch - 0.25},
+                duration=0.15
+            )
+            time.sleep(0.05)
+            
+            # Quick return up
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pitch + 0.1},
+                duration=0.15
+            )
+            time.sleep(0.05)
+            
+            # Return to neutral
+            self._move_to_pose(
+                head_pose=current_pose,
+                duration=0.1
+            )
+        except Exception:
+            pass
+
+    def _nod_tilt_gesture(self) -> None:
+        """Nod with tilt gesture: nod + slight head tilt for normal responses (800-2500ms)."""
+        try:
+            state = self.get_state()
+            current_pose = state.get("head_pose", {})
+            current_pitch = current_pose.get("pitch", 0.0)
+            current_yaw = current_pose.get("yaw", 0.0)
+            
+            # Nod down with slight tilt
+            self._move_to_pose(
+                head_pose={
+                    **current_pose,
+                    "pitch": current_pitch - 0.28,
+                    "yaw": current_yaw + 0.1,
+                    "roll": current_pose.get("roll", 0.0) + 0.05
+                },
+                duration=0.2
+            )
+            time.sleep(0.1)
+            
+            # Return up with opposite tilt
+            self._move_to_pose(
+                head_pose={
+                    **current_pose,
+                    "pitch": current_pitch + 0.12,
+                    "yaw": current_yaw - 0.05
+                },
+                duration=0.2
+            )
+            time.sleep(0.08)
+            
+            # Return to neutral
+            self._move_to_pose(
+                head_pose=current_pose,
+                duration=0.2
+            )
+        except Exception:
+            pass
+
+    def _thinking_done_gesture(self) -> None:
+        """Thinking done gesture: slow head pan indicating processing completed (>2500ms)."""
+        try:
+            state = self.get_state()
+            current_pose = state.get("head_pose", {})
+            current_yaw = current_pose.get("yaw", 0.0)
+            
+            # Slow pan right
+            self._move_to_pose(
+                head_pose={**current_pose, "yaw": current_yaw + 0.2, "pitch": current_pose.get("pitch", 0.0) - 0.1},
+                duration=0.4
+            )
+            time.sleep(0.2)
+            
+            # Slow pan left
+            self._move_to_pose(
+                head_pose={**current_pose, "yaw": current_yaw - 0.2, "pitch": current_pose.get("pitch", 0.0) - 0.1},
+                duration=0.4
+            )
+            time.sleep(0.2)
+            
+            # Return to center
+            self._move_to_pose(
+                head_pose=current_pose,
+                duration=0.3
+            )
+        except Exception:
+            pass
+
+    def _error_gesture(self) -> None:
+        """Error gesture: shake/no or sad posture for failures."""
+        try:
+            state = self.get_state()
+            current_pose = state.get("head_pose", {})
+            current_yaw = current_pose.get("yaw", 0.0)
+            
+            # Quick shake left-right-left (no gesture)
+            for yaw_offset in [0.25, -0.25, 0.15]:
+                self._move_to_pose(
+                    head_pose={**current_pose, "yaw": current_yaw + yaw_offset},
+                    duration=0.12
+                )
+                time.sleep(0.08)
+            
+            # Slight head down (sad posture)
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) - 0.2},
+                duration=0.2
+            )
+            time.sleep(0.2)
+            
+            # Return to neutral
+            self._move_to_pose(
+                head_pose=current_pose,
                 duration=0.25
             )
         except Exception:
