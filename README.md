@@ -72,8 +72,17 @@ AIM_BASE_URL=http://127.0.0.1:8000
 
 **Terminal 1 - Start Reachy daemon:**
 ```bash
-# For hardware robot:
+# Activate virtual environment
+source .venv/bin/activate
+
+# For hardware robot (after plugging in):
+# Set permissions for the serial port
+sudo chmod 666 /dev/ttyACM0
+
+# Start daemon
 reachy-mini-daemon -p /dev/ttyACM0 --fastapi-port 8001
+
+# Daemon will be accessible at: http://127.0.0.1:8001/
 
 # OR for simulation:
 make sim
@@ -734,11 +743,26 @@ Fully Implemented:
 
 ## Connect to a Physical Robot
 
-1. Connect to physical robot:
+1. After plugging in the robot, start the daemon:
    ```bash
-   # Run daemon with serial port instead of simulation
-   reachy-mini-daemon -p /dev/ttyUSB0  # or your serial port
+   # Activate virtual environment
+   source .venv/bin/activate
+   
+   # Set permissions for the serial port (required each time after plugging in)
+   sudo chmod 666 /dev/ttyACM0
+   
+   # Start daemon with the robot's serial port
+   reachy-mini-daemon -p /dev/ttyACM0 --fastapi-port 8001
+   
+   # Daemon will be accessible at: http://127.0.0.1:8001/
    ```
+   
+   **Note:** The permission step (`sudo chmod 666 /dev/ttyACM0`) is required each time after plugging in the robot. Alternatively, you can add your user to the `dialout` group to avoid needing `sudo`:
+   ```bash
+   sudo usermod -a -G dialout $USER
+   # Then log out and back in, or run: newgrp dialout
+   ```
+   
    The existing gesture implementation will work with the physical robot - no code changes needed!
 
 2. Customize gestures (optional):
