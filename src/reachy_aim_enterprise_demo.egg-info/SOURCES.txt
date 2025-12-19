@@ -1,3 +1,4 @@
+LICENSE
 README.md
 pyproject.toml
 src/reachy_aim_enterprise_demo.egg-info/PKG-INFO
@@ -20,8 +21,13 @@ src/reachy_demo/aim/models.py
 src/reachy_demo/obs/__init__.py
 src/reachy_demo/obs/metrics.py
 src/reachy_demo/orchestrator/__init__.py
+src/reachy_demo/orchestrator/gesture_mapping.py
 src/reachy_demo/orchestrator/loop.py
 src/reachy_demo/orchestrator/prompts.py
+src/reachy_demo/policy/__init__.py
+src/reachy_demo/policy/latency_policy.py
 src/reachy_demo/tools/__init__.py
 src/reachy_demo/tools/loadgen_local.py
+src/reachy_demo/tools/test_gesture_mapping.py
+src/reachy_demo/tools/test_tts.py
 tests/test_config.py

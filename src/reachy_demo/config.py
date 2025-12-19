@@ -30,6 +30,7 @@ class Settings:
     aim_api_key: str | None = None
     aim_timeout_ms: int = 30000  # 30 seconds - local LLMs need more time
     aim_max_retries: int = 1
+    aim_max_tokens: int = 200  # Increased to allow for thinking tokens (100) + response (100)
 
     # Reachy Mini daemon
     reachy_daemon_url: str = "http://127.0.0.1:8001"  # Default 8001 to avoid AIM port conflicts
@@ -51,6 +52,7 @@ def load_settings() -> Settings:
         aim_api_key=_env("AIM_API_KEY", None),
         aim_timeout_ms=_env_int("AIM_TIMEOUT_MS", 30000),  # 30 seconds default
         aim_max_retries=_env_int("AIM_MAX_RETRIES", 1),
+        aim_max_tokens=_env_int("AIM_MAX_TOKENS", 200),  # Default: 200 (100 for thinking + 100 for response)
         reachy_daemon_url=_env("REACHY_DAEMON_URL", "http://127.0.0.1:8001") or "http://127.0.0.1:8001",
         robot_mode=_env("ROBOT_MODE", "sim") or "sim",
         e2e_slo_ms=_env_int("E2E_SLO_MS", 2500),

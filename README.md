@@ -91,6 +91,18 @@ That's it! The demo will:
 
 **Note:** The `.env.example` is pre-configured with `REACHY_DAEMON_URL=http://127.0.0.1:8001` to match the daemon port.
 
+### Direct Robot Commands
+
+You can control the robot directly without going through the LLM by using the `cmd:` prefix:
+
+- `cmd:gesture <name>` - Execute a gesture directly (e.g., `cmd:gesture nod`)
+- `cmd:reset` - Reset robot to home position
+- `cmd:calibrate` - Calibrate current position as home
+- `cmd:state` - Show current robot state
+- `cmd:help` - Show all available commands
+
+See [docs/direct-commands.md](docs/direct-commands.md) for full documentation.
+
 ## Demo Narrative
 
 This demo showcases an enterprise edge-to-cloud AI architecture:

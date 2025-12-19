@@ -14,3 +14,9 @@ class RobotAdapter(ABC):
 
     @abstractmethod
     def speak(self, text: str) -> None: ...
+
+    @abstractmethod
+    def reset(self) -> None: ...
+
+    @abstractmethod
+    def calibrate_home(self) -> None: ...

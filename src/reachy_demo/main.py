@@ -51,7 +51,7 @@ def run(
         max_retries=s.aim_max_retries,
     )
     robot = _make_robot(s)
-    run_interactive_loop(aim=aim, robot=robot, model=s.aim_model, e2e_slo_ms=s.e2e_slo_ms)
+    run_interactive_loop(aim=aim, robot=robot, model=s.aim_model, e2e_slo_ms=s.e2e_slo_ms, max_tokens=s.aim_max_tokens)
 
 if __name__ == "__main__":
     app()

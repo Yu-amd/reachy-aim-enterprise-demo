@@ -5,6 +5,7 @@ Summary: Reachy Mini Lite enterprise demo skeleton: edge client + OpenAI-compati
 License: Apache-2.0
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
+License-File: LICENSE
 Requires-Dist: requests>=2.32.0
 Requires-Dist: python-dotenv>=1.0.1
 Requires-Dist: typer>=0.12.3
@@ -12,6 +13,7 @@ Requires-Dist: rich>=13.7.1
 Requires-Dist: pydantic>=2.7.0
 Requires-Dist: prometheus-client>=0.20.0
 Requires-Dist: pyttsx3>=2.90
+Dynamic: license-file
 
 # Reachy Mini Lite + AMD Inference Microservice (AIM) Enterprise Demo
 
@@ -39,53 +41,72 @@ AIM Endpoint (OpenAI-compatible) on MI300X (Cluster)
 
 ## Demo Modes
 
-### Mode A (Recommended): Remote AIM Endpoint
-- AIM runs in your cluster (MI300X datacenter)
-- Edge client points to `AIM_BASE_URL` (e.g., via SSH port forward or ingress)
-- Reachy daemon runs locally on edge host (sim or hardware)
-- Use case: Production-like setup, real inference hardware
+### Mode A: Local LMStudio (Recommended for Quick Start)
+- **LLM Endpoint**: LMStudio running locally on your laptop
+- **Port**: LMStudio defaults to `:1234`
+- **Reachy Daemon**: Runs on port `:8001` (to avoid conflicts)
+- **Use Case**: Quick local testing, development, demos
+- **Setup**: Just start LMStudio, then run the demo
 
-### Mode B: Local LLM Endpoint
-- Local LLM endpoint runs on the same host as edge client
-- Supports OpenAI-compatible endpoints:
-  - Ollama (local LLM runner)
-  - LMStudio (local LLM GUI/server)
-  - Custom OpenAI-compatible endpoint
-- Both LLM endpoint and daemon need different ports (LLM: 8000 or 1234, daemon: 8001)
-- Note: AIM (AMD Inference Microservice) requires Instinct data center GPU hardware and is not supported locally
-- Use case: Development, testing without cluster access, local experimentation
+### Mode B: Remote AIM Endpoint (Production)
+- **LLM Endpoint**: AIM running in Kubernetes cluster (MI300X datacenter)
+- **Port**: AIM typically on `:8000` (via SSH port forward or ingress)
+- **Reachy Daemon**: Runs on port `:8001` (to avoid conflicts)
+- **Use Case**: Production-like setup, real inference hardware
+- **Setup**: Requires cluster access and SSH port forwarding
 
-## Quick Start Guide (Recommended for testing without a robot)
+## Quick Start Guide (Golden Path)
 
-Start an LLM endpoint: 1) AIM endpoint 2) local LLM on edge client.
+### Prerequisites
+- Python 3.10+
+- LMStudio installed and running (Mode A) OR access to AIM endpoint (Mode B)
+- Reachy Mini daemon installed (`pip install reachy-mini[mujoco]`)
 
+### Port Rules
+- **LMStudio**: Default port `:1234`
+- **AIM Endpoint**: Default port `:8000` (or configured port)
+- **Reachy Daemon**: Uses port `:8001` (avoids conflicts with LLM endpoints)
+- **Metrics**: Port `:9100` (Prometheus metrics)
+
+### Step-by-Step Setup
+
+**1. One-time setup:**
 ```bash
-# Setup (one time)
 make install
 cp .env.example .env
+```
 
-# Edit .env: Set AIM_BASE_URL to your LLM endpoint
-# REQUIRED: Update AIM_BASE_URL in .env
-# Examples:
-#   - Remote AIM: http://127.0.0.1:8000 (via SSH port forward)
-#   - Local Ollama: http://localhost:11434
-#   - Local LMStudio: http://localhost:1234
-#   - LMStudio on network: http://192.168.1.131:1234
+**2. Configure `.env` file:**
+```bash
+# For Mode A (LMStudio local):
+AIM_BASE_URL=http://localhost:1234
 
-# Terminal 1: Start Reachy daemon on port 8001 (avoids AIM port conflicts)
+# For Mode B (AIM remote via SSH port forward):
+AIM_BASE_URL=http://127.0.0.1:8000
+```
+
+**3. Start the demo (two terminals):**
+
+**Terminal 1 - Start Reachy daemon:**
+```bash
+# For hardware robot:
+reachy-mini-daemon -p /dev/ttyACM0 --fastapi-port 8001
+
+# OR for simulation:
 make sim
+```
 
-# Terminal 2: Run the demo
+**Terminal 2 - Run demo app:**
+```bash
 make run
 ```
 
-The `make sim` command automatically runs the daemon on port 8001, and `.env.example` is pre-configured to use `REACHY_DAEMON_URL=http://127.0.0.1:8001`.
+That's it! The demo will:
+- Connect to your LLM endpoint (LMStudio or AIM)
+- Control the robot (gestures + speech)
+- Display metrics at `http://127.0.0.1:9100/metrics`
 
-**Why port 8001?** Both AIM and Reachy daemon default to port 8000. Using 8001 for the daemon avoids conflicts when AIM is on 8000 (common with SSH port forwarding).
-
-That's it! The demo will connect to your AIM endpoint and control the simulated robot.
-
-**Note:** `make install` automatically creates the virtual environment and installs dependencies. If you prefer to do it separately: `make venv` then `make install`.
+**Note:** The `.env.example` is pre-configured with `REACHY_DAEMON_URL=http://127.0.0.1:8001` to match the daemon port.
 
 ## Demo Narrative
 

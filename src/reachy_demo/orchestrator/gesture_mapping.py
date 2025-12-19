@@ -21,6 +21,30 @@ import re
 # ============================================================================
 
 GESTURE_MAPPING: Dict[str, Dict] = {
+    # Yes/Positive Responses (Highest Priority)
+    "yes_positive": {
+        "description": "Explicit yes or positive confirmation",
+        "keywords": [
+            "yes", "yeah", "yep", "yup", "sure", "absolutely", "definitely",
+            "certainly", "of course", "indeed", "affirmative", "correct",
+            "right", "exactly", "precisely", "that's right", "you're right"
+        ],
+        "gestures": ["agreeing", "happy", "nod", "emphatic"],
+        "priority": 0,  # Highest priority - check first
+    },
+    
+    # No/Negative Responses (Highest Priority)
+    "no_negative": {
+        "description": "Explicit no or negative response",
+        "keywords": [
+            "no", "nope", "nah", "not", "don't", "won't", "can't", "cannot",
+            "never", "nothing", "none", "neither", "wrong", "incorrect",
+            "false", "disagree", "that's wrong", "that's not right"
+        ],
+        "gestures": ["no"],  # Dedicated head shake gesture
+        "priority": 0,  # Highest priority - check first
+    },
+    
     # Positive/Enthusiastic Responses
     "positive_enthusiastic": {
         "description": "Strong positive emotions, excitement, praise",
@@ -37,7 +61,7 @@ GESTURE_MAPPING: Dict[str, Dict] = {
     "agreement": {
         "description": "Agreement, confirmation, validation",
         "keywords": [
-            "yes", "correct", "right", "exactly", "absolutely", "indeed",
+            "correct", "right", "exactly", "absolutely", "indeed",
             "that's right", "you're right", "agreed", "precisely", "certainly",
             "definitely", "sure", "of course", "indeed", "affirmative"
         ],

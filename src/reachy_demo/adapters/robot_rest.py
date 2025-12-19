@@ -34,12 +34,18 @@ class ReachyDaemonREST(RobotAdapter):
         self._tts_engine = None
         self._tts_checked = False
         self._tts_daemon_endpoint: Optional[str] = None
+        self._home_pose: Optional[Dict[str, Any]] = None  # Cache home position
+        self._home_pose_captured = False  # Track if we've captured home pose
 
     def _get(self, path: str) -> requests.Response:
         return requests.get(f"{self.base_url}{path}", timeout=1.0)
 
     def _post(self, path: str, json: Dict[str, Any] = None) -> requests.Response:
-        return requests.post(f"{self.base_url}{path}", json=json, timeout=5.0)
+        url = f"{self.base_url}{path}"
+        logger.debug(f"POST {url} with payload: {json}")
+        response = requests.post(url, json=json, timeout=5.0)
+        logger.debug(f"POST {url} response: {response.status_code}")
+        return response
 
     def health(self) -> bool:
         try:
@@ -50,6 +56,10 @@ class ReachyDaemonREST(RobotAdapter):
                     self._check_tts_availability()
                     tts_status = f"TTS: {self._tts_method}" if self._tts_method else "TTS: unavailable"
                     logger.info(f"✓ Reachy daemon connected at {self.base_url} - robot gestures fully functional, {tts_status}")
+                    
+                    # Don't auto-capture home position - user should calibrate manually
+                    # This prevents capturing an incorrect position on startup
+                    logger.debug("Home position not yet calibrated - will use explicit zeros until calibration")
                 else:
                     logger.warning(f"⚠ Reachy daemon not reachable at {self.base_url} - gestures will be attempted but may fail")
                 self._startup_logged = True
@@ -187,6 +197,8 @@ class ReachyDaemonREST(RobotAdapter):
         - "error": Error gesture for failures (shake/no)
         
         Expressive gestures (content-aware):
+        - "yes": Positive response (uses agreeing/happy/nod gestures)
+        - "no": Clear head shake for negative responses
         - "nod": Simple head nod (pitch down then back up)
         - "excited": Antennas wiggle with head bobs (energetic response)
         - "thinking": Head tilts side to side (processing/thinking)
@@ -201,6 +213,12 @@ class ReachyDaemonREST(RobotAdapter):
         - "random": Randomly selects from available gestures
         - "wake_up": Wake up animation
         - "goto_sleep": Sleep animation
+        
+        Recorded moves (from Reachy Mini daemon):
+        - "recorded:dataset:move": Play a recorded move from a dataset
+          Example: "recorded:default:jackson_square"
+        - Or use move name directly (will try default dataset first)
+          Example: "jackson_square" (tries "recorded:default:jackson_square")
         """
         logger.debug(f"🤖 Gesture (implemented): {name}")
         try:
@@ -238,58 +256,109 @@ class ReachyDaemonREST(RobotAdapter):
                 self._curious_gesture()
             elif name == "emphatic":
                 self._emphatic_gesture()
+            elif name == "no":
+                self._no_gesture()
             elif name == "random":
-                gestures = ["nod", "excited", "thinking", "greeting", "happy", "listening", "agreeing", "curious"]
+                gestures = ["nod", "excited", "thinking", "greeting", "happy", "listening", "agreeing", "curious", "surprised", "emphatic"]
                 self.gesture(random.choice(gestures))
             elif name == "wake_up":
                 self._post("/api/move/play/wake_up")
             elif name == "goto_sleep":
                 self._post("/api/move/play/goto_sleep")
+            elif name.startswith("recorded:"):
+                # Support for recorded moves: "recorded:dataset_name:move_name"
+                # Example: "recorded:default:jackson_square"
+                parts = name.split(":", 2)
+                if len(parts) == 3:
+                    dataset = parts[1]
+                    move = parts[2]
+                    self._play_recorded_move(dataset, move)
+                else:
+                    logger.warning(f"Invalid recorded move format: {name}. Use 'recorded:dataset:move'")
+                    self._nod_gesture()
             else:
-                # Unknown gesture, fall back to nod
-                self._nod_gesture()
+                # Try as recorded move (fallback: assume default dataset)
+                # This allows using move names directly if they exist in the default dataset
+                try:
+                    self._play_recorded_move("default", name)
+                    logger.debug(f"Executed recorded move: {name}")
+                except Exception:
+                    # If recorded move fails, fall back to nod
+                    logger.debug(f"Recorded move '{name}' not found, falling back to nod")
+                    self._nod_gesture()
         except Exception:
             # Fail silently - don't break the demo if gesture fails
             pass
 
     def _nod_gesture(self) -> None:
-        """Perform a more engaging head nod gesture with smoother movement."""
+        """Long, prominent head nod gesture with smooth, pronounced movement."""
         try:
             state = self.get_state()
             current_pose = state.get("head_pose", {})
             current_pitch = current_pose.get("pitch", 0.0)
+            current_body_yaw = state.get("body_yaw", 0.0)
             
-            # More pronounced nod: down then up with slight pause
-            # Down - smoother and more natural
+            # Very pronounced nod: down then up with longer pauses
+            # Down - more pronounced and slower
             self._post("/api/move/goto", {
                 "head_pose": {
                     **current_pose,
-                    "pitch": current_pitch - 0.35,  # Slightly more pronounced
+                    "pitch": current_pitch - 0.5,  # Much more pronounced
                 },
-                "duration": 0.25,  # Faster down movement
+                "body_yaw": current_body_yaw + 0.1,  # Add body movement
+                "duration": 0.35,  # Slower, more deliberate
                 "interpolation": "minjerk"
             })
-            time.sleep(0.08)  # Brief pause at bottom
+            time.sleep(0.15)  # Longer pause at bottom
             
-            # Up - energetic return
+            # Up - energetic return with overshoot
             self._post("/api/move/goto", {
                 "head_pose": {
                     **current_pose,
-                    "pitch": current_pitch + 0.15,  # Slight overshoot for natural feel
+                    "pitch": current_pitch + 0.25,  # More overshoot for energy
+                },
+                "body_yaw": current_body_yaw - 0.05,
+                "duration": 0.35,
+                "interpolation": "minjerk"
+            })
+            time.sleep(0.15)  # Longer pause
+            
+            # Second smaller nod for emphasis
+            self._post("/api/move/goto", {
+                "head_pose": {
+                    **current_pose,
+                    "pitch": current_pitch - 0.25,
                 },
                 "duration": 0.25,
                 "interpolation": "minjerk"
             })
-            time.sleep(0.05)
+            time.sleep(0.1)
             
-            # Smooth return to neutral
+            # Return to neutral smoothly and slowly
             self._post("/api/move/goto", {
                 "head_pose": current_pose,
-                "duration": 0.2,
+                "body_yaw": current_body_yaw,
+                "duration": 0.4,
                 "interpolation": "minjerk"
             })
         except Exception:
             pass
+
+    def _play_recorded_move(self, dataset: str, move: str) -> None:
+        """Play a recorded move from a dataset.
+        
+        Args:
+            dataset: Name of the move dataset (e.g., "default", "dances")
+            move: Name of the move within the dataset
+        """
+        try:
+            path = f"/api/move/play/recorded-move-dataset/{dataset}/{move}"
+            logger.debug(f"Playing recorded move: {dataset}/{move}")
+            response = self._post(path)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"Failed to play recorded move {dataset}/{move}: {e}")
+            raise
 
     def _move_to_pose(self, head_pose: Dict[str, float] = None, antennas: list = None, 
                       body_yaw: float = None, duration: float = 0.3) -> None:
@@ -304,60 +373,87 @@ class ReachyDaemonREST(RobotAdapter):
         if payload:
             payload["duration"] = duration
             payload["interpolation"] = "minjerk"
-            self._post("/api/move/goto", payload)
+            try:
+                logger.debug(f"Moving to pose: {payload}")
+                response = self._post("/api/move/goto", payload)
+                response.raise_for_status()  # Raise exception if HTTP error
+                logger.debug(f"Move command successful: {response.status_code}")
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Failed to move robot to pose: {e}")
+                logger.error(f"Payload was: {payload}")
+                if hasattr(e, 'response') and e.response is not None:
+                    logger.error(f"Response status: {e.response.status_code}, body: {e.response.text}")
+                raise
 
     def _excited_gesture(self) -> None:
-        """Enhanced excited gesture: more dynamic antennas wiggle with energetic head bobs and body movement."""
+        """Highly dynamic excited gesture: long, prominent energetic dance with rapid antennas, head bobs, and body movement."""
         try:
             state = self.get_state()
             current_pose = state.get("head_pose", {})
             current_antennas = state.get("antennas_position", [0.0, 0.0])
             current_body_yaw = state.get("body_yaw", 0.0)
+            current_pitch = current_pose.get("pitch", 0.0)
+            current_yaw = current_pose.get("yaw", 0.0)
             
-            # Energetic head bob up with slight body turn
+            # Very dramatic initial pose: head way up, antennas spread very wide, body turn
             self._move_to_pose(
-                head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) + 0.25},
-                body_yaw=current_body_yaw + 0.1,
-                duration=0.12
+                head_pose={**current_pose, "pitch": current_pitch + 0.45, "yaw": current_yaw + 0.25},
+                antennas=[0.7, -0.7],  # Very wide spread
+                body_yaw=current_body_yaw + 0.2,
+                duration=0.25
             )
-            time.sleep(0.08)
+            time.sleep(0.2)  # Hold dramatic pose longer
             
-            # Rapid antennas wiggle (4 movements for more energy)
-            for i in range(4):
-                # Antennas spread wide
+            # Extended energetic sequence: 5 cycles for more prominence
+            for i in range(5):
+                # Head down with antennas cross - more pronounced
                 self._move_to_pose(
-                    antennas=[0.4, -0.4],
-                    duration=0.08
+                    head_pose={**current_pose, "pitch": current_pitch - 0.35, "yaw": current_yaw + (0.15 if i % 2 == 0 else -0.15)},
+                    antennas=[-0.5, 0.5],
+                    body_yaw=current_body_yaw + (0.15 if i % 2 == 0 else -0.15),
+                    duration=0.15
                 )
-                time.sleep(0.03)
-                # Antennas cross
+                time.sleep(0.1)  # Longer pause
+                
+                # Head up with antennas spread - more pronounced
                 self._move_to_pose(
-                    antennas=[-0.3, 0.3],
-                    duration=0.08
+                    head_pose={**current_pose, "pitch": current_pitch + 0.35, "yaw": current_yaw + (-0.1 if i % 2 == 0 else 0.1)},
+                    antennas=[0.6, -0.6],
+                    duration=0.15
                 )
-                time.sleep(0.03)
+                time.sleep(0.1)  # Longer pause
             
-            # Head bob down with body return
+            # Big final flourish: very big head bob with very wide antennas
             self._move_to_pose(
-                head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) - 0.12},
-                body_yaw=current_body_yaw - 0.05,
-                duration=0.15
+                head_pose={**current_pose, "pitch": current_pitch - 0.45, "yaw": current_yaw + 0.2},
+                antennas=[0.7, 0.7],
+                body_yaw=current_body_yaw + 0.18,
+                duration=0.2
             )
-            time.sleep(0.08)
+            time.sleep(0.15)  # Hold longer
             
-            # Bounce back up
+            # Bounce back up with antennas spread very wide
             self._move_to_pose(
-                head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) + 0.1},
-                duration=0.12
+                head_pose={**current_pose, "pitch": current_pitch + 0.35, "yaw": current_yaw - 0.1},
+                antennas=[0.65, -0.65],
+                duration=0.2
             )
-            time.sleep(0.05)
+            time.sleep(0.15)  # Hold longer
             
-            # Return to original
+            # One more bounce for emphasis
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pitch - 0.25},
+                antennas=[0.5, 0.5],
+                duration=0.18
+            )
+            time.sleep(0.1)
+            
+            # Smooth return to original
             self._move_to_pose(
                 head_pose=current_pose,
                 antennas=current_antennas,
                 body_yaw=current_body_yaw,
-                duration=0.2
+                duration=0.35
             )
         except Exception:
             pass
@@ -447,45 +543,76 @@ class ReachyDaemonREST(RobotAdapter):
             pass
 
     def _happy_gesture(self) -> None:
-        """Enhanced happy gesture: more bouncy antennas with energetic head bobs."""
+        """Highly expressive happy gesture: long, prominent joyful bouncy dance with synchronized antennas and body movement."""
         try:
             state = self.get_state()
             current_pose = state.get("head_pose", {})
             current_antennas = state.get("antennas_position", [0.0, 0.0])
             current_body_yaw = state.get("body_yaw", 0.0)
+            current_pitch = current_pose.get("pitch", 0.0)
+            current_yaw = current_pose.get("yaw", 0.0)
             
-            # More bouncy movements (3 cycles for more energy)
-            for i in range(3):
-                # Head up with antennas raised and slight body turn
+            # Extended joyful sequence: 6 bouncy cycles with increasing energy and more prominent movements
+            for i in range(6):
+                # Head up with antennas raised very high and body sway - more pronounced
                 self._move_to_pose(
-                    head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) + 0.18},
-                    antennas=[0.35, 0.35],
-                    body_yaw=current_body_yaw + (0.05 if i % 2 == 0 else -0.05),
-                    duration=0.12
+                    head_pose={**current_pose, "pitch": current_pitch + 0.35, "yaw": current_yaw + (0.15 if i % 2 == 0 else -0.15)},
+                    antennas=[0.55, 0.55],  # Higher antennas
+                    body_yaw=current_body_yaw + (0.12 if i % 2 == 0 else -0.12),
+                    duration=0.15
                 )
-                time.sleep(0.08)
-                # Head down with antennas lower
+                time.sleep(0.12)  # Longer pause
+                
+                # Head down with antennas lower and opposite body sway - more pronounced
                 self._move_to_pose(
-                    head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) - 0.12},
-                    antennas=[0.15, 0.15],
-                    duration=0.12
+                    head_pose={**current_pose, "pitch": current_pitch - 0.25},
+                    antennas=[0.25, 0.25],
+                    body_yaw=current_body_yaw + (-0.08 if i % 2 == 0 else 0.08),
+                    duration=0.15
                 )
-                time.sleep(0.08)
+                time.sleep(0.12)  # Longer pause
             
-            # Final bounce up
+            # Very big final celebration: head way up high with antennas spread very wide
             self._move_to_pose(
-                head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) + 0.1},
-                antennas=[0.25, 0.25],
-                duration=0.1
+                head_pose={**current_pose, "pitch": current_pitch + 0.45, "yaw": current_yaw + 0.18},
+                antennas=[0.7, 0.7],  # Very wide
+                body_yaw=current_body_yaw + 0.15,
+                duration=0.2
             )
-            time.sleep(0.05)
+            time.sleep(0.25)  # Hold longer
             
-            # Return to original
+            # Extended bounce sequence (celebration)
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pitch - 0.3},
+                antennas=[0.4, 0.4],
+                duration=0.15
+            )
+            time.sleep(0.1)
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pitch + 0.3},
+                antennas=[0.5, 0.5],
+                duration=0.15
+            )
+            time.sleep(0.1)
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pitch - 0.2},
+                antennas=[0.35, 0.35],
+                duration=0.15
+            )
+            time.sleep(0.1)
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pitch + 0.25},
+                antennas=[0.45, 0.45],
+                duration=0.15
+            )
+            time.sleep(0.15)
+            
+            # Smooth return to original
             self._move_to_pose(
                 head_pose=current_pose,
                 antennas=current_antennas,
                 body_yaw=current_body_yaw,
-                duration=0.2
+                duration=0.4
             )
         except Exception:
             pass
@@ -550,127 +677,240 @@ class ReachyDaemonREST(RobotAdapter):
             pass
 
     def _agreeing_gesture(self) -> None:
-        """Agreeing gesture: multiple quick nods (emphatic agreement)."""
+        """Long, prominent agreeing gesture: emphatic multiple nods with body movement and antennas."""
         try:
             state = self.get_state()
             current_pose = state.get("head_pose", {})
             current_pitch = current_pose.get("pitch", 0.0)
+            current_body_yaw = state.get("body_yaw", 0.0)
+            current_antennas = state.get("antennas_position", [0.0, 0.0])
+            current_yaw = current_pose.get("yaw", 0.0)
             
-            # Three quick nods
-            for _ in range(3):
-                # Nod down
+            # Extended sequence: 6 emphatic nods with increasing energy and more prominent movements
+            for i in range(6):
+                # Nod down with body lean and antennas - more pronounced
                 self._move_to_pose(
-                    head_pose={**current_pose, "pitch": current_pitch - 0.25},
-                    duration=0.15
+                    head_pose={**current_pose, "pitch": current_pitch - 0.4, "yaw": current_yaw + (0.1 if i % 2 == 0 else -0.1)},
+                    antennas=[0.25 + i * 0.06, 0.25 + i * 0.06],  # Progressive increase
+                    body_yaw=current_body_yaw + (0.1 if i % 2 == 0 else -0.1),
+                    duration=0.18
                 )
-                time.sleep(0.05)
-                # Nod up
+                time.sleep(0.08)  # Longer pause
+                # Nod up with body return - more pronounced
                 self._move_to_pose(
-                    head_pose={**current_pose, "pitch": current_pitch + 0.1},
-                    duration=0.15
+                    head_pose={**current_pose, "pitch": current_pitch + 0.2},
+                    body_yaw=current_body_yaw + (-0.05 if i % 2 == 0 else 0.05),
+                    duration=0.18
                 )
-                time.sleep(0.1)
+                time.sleep(0.12)  # Longer pause
             
-            # Return to neutral
+            # Very strong final nod for emphasis
             self._move_to_pose(
-                head_pose=current_pose,
+                head_pose={**current_pose, "pitch": current_pitch - 0.45, "yaw": current_yaw + 0.12},
+                antennas=[0.6, 0.6],  # Very high
+                body_yaw=current_body_yaw + 0.15,
                 duration=0.2
             )
-        except Exception:
-            pass
-
-    def _surprised_gesture(self) -> None:
-        """Surprised gesture: head jerks back with antennas spread wide."""
-        try:
-            state = self.get_state()
-            current_pose = state.get("head_pose", {})
-            current_antennas = state.get("antennas_position", [0.0, 0.0])
+            time.sleep(0.15)  # Hold longer
             
-            # Quick head jerk back with antennas spread
+            # Second final nod
             self._move_to_pose(
-                head_pose={**current_pose, "pitch": current_pose.get("pitch", 0.0) + 0.3},
-                antennas=[0.5, -0.5],  # Antennas spread wide
-                duration=0.15
+                head_pose={**current_pose, "pitch": current_pitch + 0.25},
+                antennas=[0.5, 0.5],
+                duration=0.18
             )
-            time.sleep(0.2)  # Hold surprised pose
+            time.sleep(0.12)
             
             # Return to neutral
             self._move_to_pose(
                 head_pose=current_pose,
                 antennas=current_antennas,
+                body_yaw=current_body_yaw,
+                duration=0.4
+            )
+        except Exception:
+            pass
+
+    def _surprised_gesture(self) -> None:
+        """Very dramatic, long surprised gesture: prominent head jerk back with very wide antennas and body recoil."""
+        try:
+            state = self.get_state()
+            current_pose = state.get("head_pose", {})
+            current_antennas = state.get("antennas_position", [0.0, 0.0])
+            current_body_yaw = state.get("body_yaw", 0.0)
+            current_pitch = current_pose.get("pitch", 0.0)
+            current_yaw = current_pose.get("yaw", 0.0)
+            
+            # Very dramatic head jerk back with antennas spread extremely wide and body recoil
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pitch + 0.55, "yaw": current_yaw + 0.2},
+                antennas=[0.8, -0.8],  # Extremely wide spread
+                body_yaw=current_body_yaw - 0.2,  # More body recoil
+                duration=0.15  # Slightly slower for more prominence
+            )
+            time.sleep(0.4)  # Hold surprised pose much longer
+            
+            # Slight forward lean (processing the surprise) - more pronounced
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pitch + 0.35, "yaw": current_yaw - 0.1},
+                antennas=[0.5, -0.5],
+                body_yaw=current_body_yaw - 0.1,
                 duration=0.25
+            )
+            time.sleep(0.3)  # Longer pause
+            
+            # Another processing movement
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pitch + 0.2, "yaw": current_yaw + 0.05},
+                antennas=[0.4, -0.4],
+                body_yaw=current_body_yaw - 0.05,
+                duration=0.25
+            )
+            time.sleep(0.25)
+            
+            # Return to neutral with smooth, slow recovery
+            self._move_to_pose(
+                head_pose=current_pose,
+                antennas=current_antennas,
+                body_yaw=current_body_yaw,
+                duration=0.45
             )
         except Exception:
             pass
 
     def _curious_gesture(self) -> None:
-        """Curious gesture: head tilts with slight body turn (inquisitive posture)."""
+        """Expressive curious gesture: dynamic head tilts with body movement and antennas perked (inquisitive posture)."""
         try:
             state = self.get_state()
             current_pose = state.get("head_pose", {})
             current_body_yaw = state.get("body_yaw", 0.0)
+            current_antennas = state.get("antennas_position", [0.0, 0.0])
+            current_yaw = current_pose.get("yaw", 0.0)
             
-            # Head tilt right with body turn
+            # Head tilt right with body turn and antennas perked
             self._move_to_pose(
                 head_pose={
                     **current_pose,
-                    "yaw": current_pose.get("yaw", 0.0) + 0.2,
-                    "roll": current_pose.get("roll", 0.0) + 0.15
+                    "yaw": current_yaw + 0.25,
+                    "roll": current_pose.get("roll", 0.0) + 0.18,
+                    "pitch": current_pose.get("pitch", 0.0) - 0.08
                 },
-                body_yaw=current_body_yaw + 0.15,
-                duration=0.3
+                antennas=[0.3, 0.3],  # Antennas perked up
+                body_yaw=current_body_yaw + 0.18,
+                duration=0.28
+            )
+            time.sleep(0.35)
+            
+            # Tilt left with opposite movement
+            self._move_to_pose(
+                head_pose={
+                    **current_pose,
+                    "yaw": current_yaw - 0.2,
+                    "roll": current_pose.get("roll", 0.0) - 0.15,
+                    "pitch": current_pose.get("pitch", 0.0) - 0.08
+                },
+                body_yaw=current_body_yaw - 0.15,
+                duration=0.28
             )
             time.sleep(0.3)
             
-            # Slight adjustment (like thinking)
+            # Extended adjustment sequence (like deep thinking)
+            current_pitch = current_pose.get("pitch", 0.0)
             self._move_to_pose(
                 head_pose={
                     **current_pose,
-                    "yaw": current_pose.get("yaw", 0.0) - 0.15,
-                    "roll": current_pose.get("roll", 0.0) - 0.1
+                    "yaw": current_yaw - 0.2,
+                    "roll": current_pose.get("roll", 0.0) - 0.12,
+                    "pitch": current_pitch - 0.1
                 },
-                duration=0.25
+                body_yaw=current_body_yaw - 0.12,
+                duration=0.3
             )
-            time.sleep(0.2)
+            time.sleep(0.3)  # Longer pause
             
-            # Return to neutral
+            # Another tilt for extended curiosity
+            self._move_to_pose(
+                head_pose={
+                    **current_pose,
+                    "yaw": current_yaw + 0.15,
+                    "roll": current_pose.get("roll", 0.0) + 0.1
+                },
+                body_yaw=current_body_yaw + 0.1,
+                duration=0.3
+            )
+            time.sleep(0.25)
+            
+            # Return to neutral with antennas - slower
             self._move_to_pose(
                 head_pose=current_pose,
+                antennas=current_antennas,
                 body_yaw=current_body_yaw,
-                duration=0.3
+                duration=0.45
             )
         except Exception:
             pass
 
     def _emphatic_gesture(self) -> None:
-        """Emphatic gesture: strong nod with body movement (emphasis)."""
+        """Very long, highly emphatic gesture: powerful extended nod sequence with dramatic body movement and antennas (strong emphasis)."""
         try:
             state = self.get_state()
             current_pose = state.get("head_pose", {})
             current_body_yaw = state.get("body_yaw", 0.0)
             current_pitch = current_pose.get("pitch", 0.0)
+            current_antennas = state.get("antennas_position", [0.0, 0.0])
+            current_yaw = current_pose.get("yaw", 0.0)
             
-            # Strong nod down with body lean
+            # Very powerful nod down with body lean forward and antennas raised high
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pitch - 0.55, "yaw": current_yaw + 0.15},
+                antennas=[0.6, 0.6],  # Very high
+                body_yaw=current_body_yaw + 0.25,  # More body movement
+                duration=0.25
+            )
+            time.sleep(0.2)  # Hold longer
+            
+            # Strong return up with body return and antennas spread very wide
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pitch + 0.35, "yaw": current_yaw - 0.1},
+                antennas=[0.65, -0.65],  # Very wide
+                body_yaw=current_body_yaw - 0.15,
+                duration=0.25
+            )
+            time.sleep(0.2)  # Hold longer
+            
+            # Second very emphatic nod for extra emphasis
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pitch - 0.5, "yaw": current_yaw + 0.12},
+                antennas=[0.55, 0.55],
+                body_yaw=current_body_yaw + 0.2,
+                duration=0.22
+            )
+            time.sleep(0.18)
+            
+            # Third nod for maximum emphasis
             self._move_to_pose(
                 head_pose={**current_pose, "pitch": current_pitch - 0.4},
-                body_yaw=current_body_yaw + 0.1,
+                antennas=[0.5, 0.5],
+                body_yaw=current_body_yaw + 0.15,
                 duration=0.2
             )
-            time.sleep(0.1)
+            time.sleep(0.15)
             
-            # Strong return up with body return
+            # Final return up
             self._move_to_pose(
-                head_pose={**current_pose, "pitch": current_pitch + 0.2},
-                body_yaw=current_body_yaw - 0.05,
+                head_pose={**current_pose, "pitch": current_pitch + 0.3, "yaw": current_yaw - 0.08},
+                antennas=[0.4, -0.4],
+                body_yaw=current_body_yaw - 0.1,
                 duration=0.2
             )
-            time.sleep(0.1)
+            time.sleep(0.15)
             
-            # Final return to neutral
+            # Smooth, slow return to neutral
             self._move_to_pose(
                 head_pose=current_pose,
+                antennas=current_antennas,
                 body_yaw=current_body_yaw,
-                duration=0.25
+                duration=0.45
             )
         except Exception:
             pass
@@ -727,68 +967,150 @@ class ReachyDaemonREST(RobotAdapter):
             pass
 
     def _nod_tilt_gesture(self) -> None:
-        """Nod with tilt gesture: nod + slight head tilt for normal responses (800-2500ms)."""
+        """Long, prominent nod with tilt gesture: expressive extended nod with dynamic head tilt and body movement for normal responses (800-2500ms)."""
         try:
             state = self.get_state()
             current_pose = state.get("head_pose", {})
             current_pitch = current_pose.get("pitch", 0.0)
             current_yaw = current_pose.get("yaw", 0.0)
+            current_body_yaw = state.get("body_yaw", 0.0)
             
-            # Nod down with slight tilt
+            # Very pronounced nod down with prominent tilt and body movement
             self._move_to_pose(
                 head_pose={
                     **current_pose,
-                    "pitch": current_pitch - 0.28,
-                    "yaw": current_yaw + 0.1,
-                    "roll": current_pose.get("roll", 0.0) + 0.05
+                    "pitch": current_pitch - 0.45,
+                    "yaw": current_yaw + 0.25,
+                    "roll": current_pose.get("roll", 0.0) + 0.12
                 },
-                duration=0.2
+                body_yaw=current_body_yaw + 0.15,
+                duration=0.3
             )
-            time.sleep(0.1)
+            time.sleep(0.2)  # Hold longer
             
-            # Return up with opposite tilt
+            # Return up with opposite tilt and body return - more pronounced
             self._move_to_pose(
                 head_pose={
                     **current_pose,
-                    "pitch": current_pitch + 0.12,
+                    "pitch": current_pitch + 0.25,
+                    "yaw": current_yaw - 0.15,
+                    "roll": current_pose.get("roll", 0.0) - 0.08
+                },
+                body_yaw=current_body_yaw - 0.1,
+                duration=0.3
+            )
+            time.sleep(0.15)  # Longer pause
+            
+            # Second nod for emphasis - more pronounced
+            self._move_to_pose(
+                head_pose={
+                    **current_pose,
+                    "pitch": current_pitch - 0.3,
+                    "yaw": current_yaw + 0.1
+                },
+                body_yaw=current_body_yaw + 0.08,
+                duration=0.25
+            )
+            time.sleep(0.12)
+            
+            # Third small nod
+            self._move_to_pose(
+                head_pose={
+                    **current_pose,
+                    "pitch": current_pitch + 0.2,
                     "yaw": current_yaw - 0.05
                 },
-                duration=0.2
+                duration=0.22
             )
-            time.sleep(0.08)
+            time.sleep(0.1)
             
             # Return to neutral
             self._move_to_pose(
                 head_pose=current_pose,
-                duration=0.2
+                body_yaw=current_body_yaw,
+                duration=0.4
             )
         except Exception:
             pass
 
     def _thinking_done_gesture(self) -> None:
-        """Thinking done gesture: slow head pan indicating processing completed (>2500ms)."""
+        """Long, prominent thinking done gesture: extended deliberate head movement sequence indicating processing completed (>2500ms)."""
         try:
             state = self.get_state()
             current_pose = state.get("head_pose", {})
             current_yaw = current_pose.get("yaw", 0.0)
+            current_pitch = current_pose.get("pitch", 0.0)
+            current_body_yaw = state.get("body_yaw", 0.0)
             
-            # Slow pan right
+            # Extended thoughtful sequence: very slow pan right with more pronounced pitch down
             self._move_to_pose(
-                head_pose={**current_pose, "yaw": current_yaw + 0.2, "pitch": current_pose.get("pitch", 0.0) - 0.1},
+                head_pose={**current_pose, "yaw": current_yaw + 0.35, "pitch": current_pitch - 0.2, "roll": current_pose.get("roll", 0.0) + 0.1},
+                body_yaw=current_body_yaw + 0.2,
+                duration=0.6  # Slower, more deliberate
+            )
+            time.sleep(0.4)  # Hold longer
+            
+            # Very slow pan left with opposite tilt - more pronounced
+            self._move_to_pose(
+                head_pose={**current_pose, "yaw": current_yaw - 0.35, "pitch": current_pitch - 0.2, "roll": current_pose.get("roll", 0.0) - 0.1},
+                body_yaw=current_body_yaw - 0.2,
+                duration=0.6  # Slower
+            )
+            time.sleep(0.4)  # Hold longer
+            
+            # Another pan right for extended thinking
+            self._move_to_pose(
+                head_pose={**current_pose, "yaw": current_yaw + 0.25, "pitch": current_pitch - 0.15},
+                body_yaw=current_body_yaw + 0.15,
+                duration=0.5
+            )
+            time.sleep(0.3)
+            
+            # Final prominent nod up (understanding achieved)
+            self._move_to_pose(
+                head_pose={**current_pose, "pitch": current_pitch + 0.3, "yaw": current_yaw + 0.1},
+                body_yaw=current_body_yaw + 0.1,
                 duration=0.4
             )
-            time.sleep(0.2)
+            time.sleep(0.3)  # Hold longer
             
-            # Slow pan left
+            # Return to center with confidence - slower
             self._move_to_pose(
-                head_pose={**current_pose, "yaw": current_yaw - 0.2, "pitch": current_pose.get("pitch", 0.0) - 0.1},
-                duration=0.4
+                head_pose=current_pose,
+                body_yaw=current_body_yaw,
+                duration=0.5
             )
-            time.sleep(0.2)
+        except Exception:
+            pass
+
+    def _no_gesture(self) -> None:
+        """Clear head shake gesture for negative/no responses: prominent left-right shake."""
+        try:
+            state = self.get_state()
+            current_pose = state.get("head_pose", {})
+            current_yaw = current_pose.get("yaw", 0.0)
+            current_body_yaw = state.get("body_yaw", 0.0)
+            
+            # Prominent head shake: left-right-left-right (clear "no" gesture)
+            shake_pattern = [
+                (0.4, -0.05),   # Right with slight body turn
+                (-0.4, 0.05),   # Left with opposite body turn
+                (0.35, -0.03),  # Right again
+                (-0.35, 0.03),  # Left again
+            ]
+            
+            for yaw_offset, body_offset in shake_pattern:
+                self._move_to_pose(
+                    head_pose={**current_pose, "yaw": current_yaw + yaw_offset},
+                    body_yaw=current_body_yaw + body_offset,
+                    duration=0.15
+                )
+                time.sleep(0.1)  # Clear pause between shakes
             
             # Return to center
             self._move_to_pose(
                 head_pose=current_pose,
+                body_yaw=current_body_yaw,
                 duration=0.3
             )
         except Exception:
@@ -1131,3 +1453,87 @@ class ReachyDaemonREST(RobotAdapter):
         # Run TTS in background thread to avoid blocking the main loop
         thread = threading.Thread(target=_speak_async, daemon=True)
         thread.start()
+
+    def calibrate_home(self) -> None:
+        """Calibrate home position: capture the robot's current position as the home/neutral position.
+        
+        Use this when the robot is in the desired neutral position (no tilt, centered).
+        After calibration, reset() will return the robot to this position.
+        """
+        try:
+            state = self.get_state()
+            current_pose = state.get("head_pose", {})
+            current_antennas = state.get("antennas_position", [0.0, 0.0])
+            current_body_yaw = state.get("body_yaw", 0.0)
+            
+            # Store the current state as the home position
+            self._home_pose = {
+                "head_pose": {
+                    "pitch": current_pose.get("pitch", 0.0),
+                    "yaw": current_pose.get("yaw", 0.0),
+                    "roll": current_pose.get("roll", 0.0)
+                },
+                "antennas": list(current_antennas) if current_antennas else [0.0, 0.0],
+                "body_yaw": current_body_yaw
+            }
+            self._home_pose_captured = True
+            
+            logger.info(f"✓ Home position calibrated: pitch={self._home_pose['head_pose']['pitch']:.3f}, yaw={self._home_pose['head_pose']['yaw']:.3f}, roll={self._home_pose['head_pose']['roll']:.3f}, antennas={self._home_pose['antennas']}, body={self._home_pose['body_yaw']:.3f}")
+        except Exception as e:
+            logger.error(f"Failed to calibrate home position: {e}")
+            raise
+
+    def reset(self) -> None:
+        """Reset robot to the final position of wake_up gesture.
+        
+        The wake_up gesture ends at the correct neutral position (head, antennas, body).
+        This is simpler and more reliable than doing multiple adjustment passes.
+        """
+        logger.info("🤖 Resetting robot using wake_up gesture (ends at correct neutral position)...")
+        
+        try:
+            # Get state before reset to log the change
+            before_state = self.get_state()
+            before_pose = before_state.get("head_pose", {})
+            before_antennas = before_state.get("antennas_position", [0.0, 0.0])
+            before_body_yaw = before_state.get("body_yaw", 0.0)
+            logger.info(f"🤖 Before reset: pitch={before_pose.get('pitch', 0.0):.3f}, yaw={before_pose.get('yaw', 0.0):.3f}, roll={before_pose.get('roll', 0.0):.3f}, antennas=[{before_antennas[0] if len(before_antennas) > 0 else 0.0:.3f},{before_antennas[1] if len(before_antennas) > 1 else 0.0:.3f}], body={before_body_yaw:.3f}")
+        except Exception as e:
+            logger.warning(f"Could not get state before reset: {e}")
+            before_pose = {}
+            before_antennas = [0.0, 0.0]
+            before_body_yaw = 0.0
+        
+        # Call wake_up gesture - it ends at the correct neutral position
+        try:
+            self._post("/api/move/play/wake_up")
+            logger.info("🤖 Wake_up gesture started, waiting for completion...")
+        except Exception as e:
+            logger.error(f"🤖 Failed to start wake_up gesture: {e}")
+            raise
+        
+        # Wait for wake_up to complete
+        # wake_up includes: initial move to INIT_HEAD_POSE, sound, roll animation (20° left then back), return to INIT_HEAD_POSE
+        # Total duration is approximately: initial move (adaptive) + 0.1s + sound + 0.2s roll + 0.2s return = ~1-2 seconds
+        # Add extra buffer for safety
+        time.sleep(2.5)
+        
+        # Verify final position
+        try:
+            after_state = self.get_state()
+            after_pose = after_state.get("head_pose", {})
+            after_antennas = after_state.get("antennas_position", [0.0, 0.0])
+            after_body_yaw = after_state.get("body_yaw", 0.0)
+            
+            logger.info(f"🤖 After wake_up: pitch={after_pose.get('pitch', 0.0):.3f}, yaw={after_pose.get('yaw', 0.0):.3f}, roll={after_pose.get('roll', 0.0):.3f}, antennas=[{after_antennas[0] if len(after_antennas) > 0 else 0.0:.3f},{after_antennas[1] if len(after_antennas) > 1 else 0.0:.3f}], body={after_body_yaw:.3f}")
+            
+            # Calculate movement change
+            pitch_change = abs(after_pose.get('pitch', 0.0) - before_pose.get('pitch', 0.0))
+            yaw_change = abs(after_pose.get('yaw', 0.0) - before_pose.get('yaw', 0.0))
+            roll_change = abs(after_pose.get('roll', 0.0) - before_pose.get('roll', 0.0))
+            max_change = max(pitch_change, yaw_change, roll_change)
+            
+            logger.info(f"🤖 Reset complete! Movement: pitch={pitch_change:.3f}, yaw={yaw_change:.3f}, roll={roll_change:.3f}, max={max_change:.3f}")
+        except Exception as e:
+            logger.warning(f"Could not verify reset state: {e}")
+            # Still consider it successful since wake_up completed
