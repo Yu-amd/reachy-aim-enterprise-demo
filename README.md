@@ -368,23 +368,85 @@ Text-to-Speech:
 - System TTS works offline and cross-platform (Windows, Linux, macOS)
 - You'll see a startup message indicating which TTS method is being used (e.g., `✓ TTS: Using system TTS (pyttsx3)`)
 
-### Step 6: (Optional) Check Prometheus metrics
+### Step 6: (Optional) Monitor Metrics and Observability
 
-While the demo is running, you can view metrics in another terminal:
+The demo exposes Prometheus metrics at `http://127.0.0.1:9100/metrics`. You can monitor these metrics in several ways:
+
+#### Option 1: Real-time Dashboard (Recommended)
+
+A rich terminal dashboard with live updates:
 
 ```bash
-# View metrics endpoint
-curl http://127.0.0.1:9100/metrics
+# In a new terminal (with venv activated)
+python tools/monitor_metrics.py
 ```
 
-Or open in browser: http://127.0.0.1:9100/metrics
+This shows:
+- **Request Statistics**: Total requests, errors, SLO misses, backend failures
+- **Latency Metrics**: Average, P50, P95, P99 for LLM calls and end-to-end latency
+- **Gesture Selection**: Distribution of gestures being used
+- **SLO Compliance**: Real-time SLO status
 
-Available metrics:
-- `edge_e2e_ms` - End-to-end latency histogram
-- `aim_call_ms` - AIM API call latency histogram
+The dashboard auto-refreshes every 0.5 seconds.
+
+#### Option 2: Query Metrics Tool
+
+Get a formatted snapshot of current metrics:
+
+```bash
+# In a new terminal (with venv activated)
+python tools/query_metrics.py
+```
+
+This displays:
+- Latency percentiles (P50, P95, P99)
+- Request statistics
+- Gesture distribution
+- SLO compliance status
+
+#### Option 3: Raw Prometheus Endpoint
+
+View raw metrics in your browser or via curl:
+
+```bash
+# View all metrics
+curl http://127.0.0.1:9100/metrics
+
+# Or open in browser
+# http://127.0.0.1:9100/metrics
+```
+
+#### Option 4: Simple Terminal Monitor
+
+Quick text-based monitoring:
+
+```bash
+# Watch key metrics (refreshes every 2 seconds)
+./tools/monitor_metrics.sh
+
+# Or with custom refresh interval
+./tools/monitor_metrics.sh 1
+```
+
+#### Available Metrics
+
+- `llm_call_ms` - LLM inference latency histogram (milliseconds)
+- `edge_e2e_ms` - End-to-end latency histogram (milliseconds)
 - `edge_requests_total` - Total request counter
 - `edge_errors_total` - Error counter
-- `edge_slo_miss_total` - SLO violation counter
+- `edge_slo_miss_total` - SLO violation counter (>2500ms)
+- `backend_failures_total` - Backend/inference failure counter
+- `gesture_selected_total{gesture="..."}` - Gesture selection counter
+
+#### Example Metrics Output
+
+After running some queries, you can see:
+- **Average latency**: How fast responses are
+- **Percentiles**: P50 (median), P95 (95th percentile), P99 (99th percentile)
+- **SLO compliance**: Percentage of requests meeting the 2500ms target
+- **Gesture distribution**: Which gestures are being used most
+
+For more details, see [docs/enterprise-latency-behavior.md](docs/enterprise-latency-behavior.md).
 
 ### Step 7: (Optional) Test local load generator
 

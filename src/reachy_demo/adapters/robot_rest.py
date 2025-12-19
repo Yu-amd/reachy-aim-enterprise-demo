@@ -398,6 +398,9 @@ class ReachyDaemonREST(RobotAdapter):
         """Helper method to move robot to a specific pose."""
         payload = {}
         if head_pose is not None:
+            # Ensure roll is always explicitly set (default to 0.0 if not specified)
+            if "roll" not in head_pose:
+                head_pose = {**head_pose, "roll": 0.0}
             payload["head_pose"] = head_pose
         if antennas is not None:
             payload["antennas"] = antennas
@@ -417,6 +420,21 @@ class ReachyDaemonREST(RobotAdapter):
                 if hasattr(e, 'response') and e.response is not None:
                     logger.error(f"Response status: {e.response.status_code}, body: {e.response.text}")
                 raise
+    
+    def _return_to_clean_pose(self, current_pose: Dict[str, float], current_antennas: list = None, 
+                              current_body_yaw: float = None, duration: float = 0.3) -> None:
+        """Helper to return to a clean pose with roll=0.0 (prevents head tilt)."""
+        clean_head_pose = {
+            "pitch": current_pose.get("pitch", 0.0),
+            "yaw": current_pose.get("yaw", 0.0),
+            "roll": 0.0  # Always zero roll - no tilt
+        }
+        self._move_to_pose(
+            head_pose=clean_head_pose,
+            antennas=current_antennas,
+            body_yaw=current_body_yaw,
+            duration=duration
+        )
 
     def _excited_gesture(self) -> None:
         """Highly dynamic excited gesture: long, prominent energetic dance with rapid antennas, head bobs, and body movement."""
@@ -481,13 +499,8 @@ class ReachyDaemonREST(RobotAdapter):
             )
             time.sleep(0.1)
             
-            # Smooth return to original
-            self._move_to_pose(
-                head_pose=current_pose,
-                antennas=current_antennas,
-                body_yaw=current_body_yaw,
-                duration=0.35
-            )
+            # Smooth return to original - explicitly set roll to 0.0
+            self._return_to_clean_pose(current_pose, current_antennas, current_body_yaw, duration=0.35)
         except Exception:
             pass
 
@@ -522,12 +535,8 @@ class ReachyDaemonREST(RobotAdapter):
             )
             time.sleep(0.15)
             
-            # Return to center
-            self._move_to_pose(
-                head_pose=current_pose,
-                body_yaw=current_body_yaw,
-                duration=0.3
-            )
+            # Return to center - explicitly set roll to 0.0
+            self._return_to_clean_pose(current_pose, current_body_yaw=current_body_yaw, duration=0.3)
         except Exception:
             pass
 
@@ -565,13 +574,8 @@ class ReachyDaemonREST(RobotAdapter):
             # Hold antennas up briefly
             time.sleep(0.1)
             
-            # Return to original
-            self._move_to_pose(
-                head_pose=current_pose,
-                antennas=current_antennas,
-                body_yaw=current_body_yaw,
-                duration=0.3
-            )
+            # Return to original - explicitly set roll to 0.0 to prevent tilt
+            self._return_to_clean_pose(current_pose, current_antennas, current_body_yaw, duration=0.3)
         except Exception:
             pass
 
@@ -640,13 +644,8 @@ class ReachyDaemonREST(RobotAdapter):
             )
             time.sleep(0.15)
             
-            # Smooth return to original
-            self._move_to_pose(
-                head_pose=current_pose,
-                antennas=current_antennas,
-                body_yaw=current_body_yaw,
-                duration=0.4
-            )
+            # Smooth return to original - explicitly set roll to 0.0 to prevent tilt
+            self._return_to_clean_pose(current_pose, current_antennas, current_body_yaw, duration=0.4)
         except Exception:
             pass
 
@@ -676,12 +675,9 @@ class ReachyDaemonREST(RobotAdapter):
                 )
                 time.sleep(0.08)
             
-            # Return to center with slight pause
+            # Return to center with slight pause - explicitly set roll to 0.0
             time.sleep(0.1)
-            self._move_to_pose(
-                head_pose=current_pose,
-                duration=0.25
-            )
+            self._return_to_clean_pose(current_pose, duration=0.25)
         except Exception:
             pass
 
@@ -700,12 +696,8 @@ class ReachyDaemonREST(RobotAdapter):
             )
             time.sleep(0.4)  # Hold attentive pose
             
-            # Return to neutral
-            self._move_to_pose(
-                head_pose=current_pose,
-                antennas=current_antennas,
-                duration=0.3
-            )
+            # Return to neutral - explicitly set roll to 0.0
+            self._return_to_clean_pose(current_pose, current_antennas, duration=0.3)
         except Exception:
             pass
 
@@ -754,13 +746,8 @@ class ReachyDaemonREST(RobotAdapter):
             )
             time.sleep(0.12)
             
-            # Return to neutral
-            self._move_to_pose(
-                head_pose=current_pose,
-                antennas=current_antennas,
-                body_yaw=current_body_yaw,
-                duration=0.4
-            )
+            # Return to neutral - explicitly set roll to 0.0
+            self._return_to_clean_pose(current_pose, current_antennas, current_body_yaw, duration=0.4)
         except Exception:
             pass
 
@@ -801,13 +788,8 @@ class ReachyDaemonREST(RobotAdapter):
             )
             time.sleep(0.25)
             
-            # Return to neutral with smooth, slow recovery
-            self._move_to_pose(
-                head_pose=current_pose,
-                antennas=current_antennas,
-                body_yaw=current_body_yaw,
-                duration=0.45
-            )
+            # Return to neutral with smooth, slow recovery - explicitly set roll to 0.0
+            self._return_to_clean_pose(current_pose, current_antennas, current_body_yaw, duration=0.45)
         except Exception:
             pass
 
@@ -873,13 +855,8 @@ class ReachyDaemonREST(RobotAdapter):
             )
             time.sleep(0.25)
             
-            # Return to neutral with antennas - slower
-            self._move_to_pose(
-                head_pose=current_pose,
-                antennas=current_antennas,
-                body_yaw=current_body_yaw,
-                duration=0.45
-            )
+            # Return to neutral with antennas - slower, explicitly set roll to 0.0
+            self._return_to_clean_pose(current_pose, current_antennas, current_body_yaw, duration=0.45)
         except Exception:
             pass
 
@@ -938,13 +915,8 @@ class ReachyDaemonREST(RobotAdapter):
             )
             time.sleep(0.15)
             
-            # Smooth, slow return to neutral
-            self._move_to_pose(
-                head_pose=current_pose,
-                antennas=current_antennas,
-                body_yaw=current_body_yaw,
-                duration=0.45
-            )
+            # Smooth, slow return to neutral - explicitly set roll to 0.0
+            self._return_to_clean_pose(current_pose, current_antennas, current_body_yaw, duration=0.45)
         except Exception:
             pass
 
@@ -993,11 +965,8 @@ class ReachyDaemonREST(RobotAdapter):
             )
             time.sleep(0.05)
             
-            # Return to neutral
-            self._move_to_pose(
-                head_pose=current_pose,
-                duration=0.1
-            )
+            # Return to neutral - explicitly set roll to 0.0
+            self._return_to_clean_pose(current_pose, duration=0.1)
         except Exception:
             pass
 
@@ -1059,12 +1028,8 @@ class ReachyDaemonREST(RobotAdapter):
             )
             time.sleep(0.1)
             
-            # Return to neutral
-            self._move_to_pose(
-                head_pose=current_pose,
-                body_yaw=current_body_yaw,
-                duration=0.4
-            )
+            # Return to neutral - explicitly set roll to 0.0
+            self._return_to_clean_pose(current_pose, current_body_yaw=current_body_yaw, duration=0.4)
         except Exception:
             pass
 
@@ -1109,12 +1074,8 @@ class ReachyDaemonREST(RobotAdapter):
             )
             time.sleep(0.3)  # Hold longer
             
-            # Return to center with confidence - slower
-            self._move_to_pose(
-                head_pose=current_pose,
-                body_yaw=current_body_yaw,
-                duration=0.5
-            )
+            # Return to center with confidence - slower, explicitly set roll to 0.0
+            self._return_to_clean_pose(current_pose, current_body_yaw=current_body_yaw, duration=0.5)
         except Exception:
             pass
 
@@ -1142,12 +1103,8 @@ class ReachyDaemonREST(RobotAdapter):
                 )
                 time.sleep(0.1)  # Clear pause between shakes
             
-            # Return to center
-            self._move_to_pose(
-                head_pose=current_pose,
-                body_yaw=current_body_yaw,
-                duration=0.3
-            )
+            # Return to center - explicitly set roll to 0.0
+            self._return_to_clean_pose(current_pose, current_body_yaw=current_body_yaw, duration=0.3)
         except Exception:
             pass
 
@@ -1173,11 +1130,8 @@ class ReachyDaemonREST(RobotAdapter):
             )
             time.sleep(0.2)
             
-            # Return to neutral
-            self._move_to_pose(
-                head_pose=current_pose,
-                duration=0.25
-            )
+            # Return to neutral - explicitly set roll to 0.0
+            self._return_to_clean_pose(current_pose, duration=0.25)
         except Exception:
             pass
 
@@ -1250,12 +1204,16 @@ class ReachyDaemonREST(RobotAdapter):
             else:
                 logger.warning(f"🔊 TTS unavailable: '{text[:50]}{'...' if len(text) > 50 else ''}'")
             
-            # Wait for motion to complete if it's still running
+            # Stop motion loop before returning
+            self._talk_motion_active = False
+            
+            # Wait for motion thread to finish
             if motion_thread and motion_thread.is_alive():
-                # Adjust motion duration if actual audio duration differs
-                if abs(actual_duration - estimated_duration) > 0.5:
-                    # Motion loop will check _talk_motion_active flag
-                    time.sleep(actual_duration - estimated_duration)
+                # Wait a bit for the motion loop to see the flag and stop
+                time.sleep(0.2)
+                # If still running, wait a bit more (motion loop checks flag every 0.1s)
+                if motion_thread.is_alive():
+                    time.sleep(0.3)
             
             return actual_duration
     
@@ -1839,6 +1797,10 @@ class ReachyDaemonREST(RobotAdapter):
         Moves directly to neutral position (0.0 for all axes) without any animations or tilts.
         Uses calibrated home position if available, otherwise uses explicit zeros.
         """
+        # Stop any ongoing motion loops first
+        self._talk_motion_active = False
+        time.sleep(0.1)  # Give motion loop time to see the flag
+        
         logger.info("🤖 Resetting robot to neutral position (no tilt)...")
         
         try:
@@ -1855,28 +1817,44 @@ class ReachyDaemonREST(RobotAdapter):
             before_body_yaw = 0.0
         
         # Move directly to neutral position (no animations, no tilt)
+        # ALWAYS explicitly set roll to 0.0 to prevent head tilt
         try:
             if self._home_pose_captured and self._home_pose is not None:
-                # Use calibrated home position
-                target_head_pose = self._home_pose.get("head_pose", {})
+                # Use calibrated home position, but ensure roll is 0.0
+                home_head_pose = self._home_pose.get("head_pose", {})
+                target_head_pose = {
+                    "pitch": home_head_pose.get("pitch", 0.0),
+                    "yaw": home_head_pose.get("yaw", 0.0),
+                    "roll": 0.0  # Always zero roll - no tilt
+                }
                 target_antennas = self._home_pose.get("antennas", [0.0, 0.0])
                 target_body_yaw = self._home_pose.get("body_yaw", 0.0)
-                logger.info("🤖 Using calibrated home position for reset")
+                logger.info("🤖 Using calibrated home position for reset (roll=0.0)")
             else:
-                # Use explicit zeros for true neutral
+                # Use explicit zeros for true neutral - ALWAYS zero roll
                 target_head_pose = {"pitch": 0.0, "yaw": 0.0, "roll": 0.0}
                 target_antennas = [0.0, 0.0]
                 target_body_yaw = 0.0
-                logger.info("🤖 Using explicit zero position for reset")
+                logger.info("🤖 Using explicit zero position for reset (roll=0.0)")
             
             # Move to neutral position smoothly
+            # Use a slightly longer duration to ensure smooth, complete movement
             self._move_to_pose(
                 head_pose=target_head_pose,
                 antennas=target_antennas,
                 body_yaw=target_body_yaw,
-                duration=0.5  # Smooth movement
+                duration=0.8  # Smooth movement with enough time to complete
             )
-            time.sleep(0.6)  # Wait for movement to complete
+            # Wait for movement to complete, plus a small buffer
+            time.sleep(1.0)  # Ensure movement fully completes
+            
+            # Double-check: move again to ensure roll is definitely 0.0
+            # This handles any cases where the first move didn't fully complete
+            self._move_to_pose(
+                head_pose={"pitch": target_head_pose["pitch"], "yaw": target_head_pose["yaw"], "roll": 0.0},
+                duration=0.3
+            )
+            time.sleep(0.4)
             
         except Exception as e:
             logger.error(f"🤖 Failed to reset robot: {e}")

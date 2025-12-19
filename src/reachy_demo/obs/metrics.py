@@ -57,17 +57,18 @@ def start_metrics_server(host: str, port: int) -> None:
     In Kubernetes: The server will be accessible within the pod. To access
     from outside, use port-forwarding or expose via a Service.
     """
-    # Check if port is already in use (check 0.0.0.0 since that's what start_http_server uses)
-    if _is_port_in_use(port, '0.0.0.0'):
-        logger.warning(f"Metrics server port {port} is already in use on 0.0.0.0. Assuming metrics server is already running.")
-        return
+    # Try to start the server - prometheus_client handles port conflicts gracefully
     try:
         # prometheus_client.start_http_server always binds to 0.0.0.0 by default
+        # It will raise OSError if port is in use, which we'll catch
         start_http_server(port)
         logger.info(f"Started metrics server on 0.0.0.0:{port} (accessible at http://{host}:{port}/metrics)")
     except OSError as e:
-        if e.errno == 98:  # Address already in use
+        if e.errno == 98:  # Address already in use (EADDRINUSE)
             logger.warning(f"Metrics server port {port} is already in use. Assuming metrics server is already running.")
         else:
             logger.error(f"Failed to start metrics server on port {port}: {e}")
             raise
+    except Exception as e:
+        logger.error(f"Unexpected error starting metrics server on port {port}: {e}")
+        raise

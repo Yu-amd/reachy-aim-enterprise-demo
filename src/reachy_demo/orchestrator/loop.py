@@ -206,14 +206,6 @@ def run_interactive_loop(
             convo.append({"role": "user", "content": user_text})
             messages = convo[-20:]  # bounded context
 
-            # Turn body to side to indicate thinking (only if model is a thinking model)
-            # We start assuming it's NOT a thinking model, and only turn body if we detect thinking tokens
-            if is_thinking_model:
-                try:
-                    robot.thinking_pose()
-                except Exception:
-                    pass  # Don't break on thinking pose failure
-
             # Call inference endpoint
             t1 = time.perf_counter()
             ok = False
@@ -232,7 +224,7 @@ def run_interactive_loop(
                 text = resp.text.strip()
                 original_text = text
                 
-                # Check if this is a thinking model by detecting thinking tokens in the raw response
+                # Check if this response contains thinking tokens
                 thinking_patterns = [
                     r'\[thinking\].*?\[/thinking\]',  # [thinking]...[/thinking]
                     r'<think>.*?</think>',  # <think>...</think>
@@ -248,7 +240,7 @@ def run_interactive_loop(
                     r'</think>',
                 ]
                 
-                # Detect if this response contains thinking tokens
+                # Detect if THIS response contains thinking tokens
                 has_thinking_tokens = False
                 for pattern in thinking_patterns:
                     if re.search(pattern, original_text, flags=re.DOTALL | re.IGNORECASE):
@@ -261,16 +253,16 @@ def run_interactive_loop(
                             break
                 
                 # Update thinking model detection: if we find thinking tokens, mark as thinking model
+                # This is just for tracking/logging purposes
                 if has_thinking_tokens and not is_thinking_model:
                     is_thinking_model = True
                     logger.debug(f"🤖 Detected thinking model: thinking tokens found in response")
                 
-                # Return body from thinking pose (only if we turned it)
-                if is_thinking_model:
-                    try:
-                        robot.return_from_thinking()
-                    except Exception:
-                        pass  # Don't break on return from thinking failure
+                # Note: We don't turn the body for thinking pose because:
+                # 1. We can't know if there are thinking tokens until after we get the response
+                # 2. Turning the body after the response defeats the purpose of showing "thinking"
+                # 3. The user reported the body was turning even when there were no thinking tokens
+                # So we've removed the thinking pose feature to avoid false positives
                 
                 # Aggressively strip ALL thinking tokens (handle multiple occurrences)
                 # Some models wrap thinking in tags like [thinking]...[/thinking] or <think>...</think>
@@ -388,12 +380,8 @@ def run_interactive_loop(
                 ERRORS.inc()
                 BACKEND_FAILURES.inc()
                 
-                # Return body from thinking pose even on error (only if we turned it)
-                if is_thinking_model:
-                    try:
-                        robot.return_from_thinking()
-                    except Exception:
-                        pass  # Don't break on return from thinking failure
+                # Note: We don't turn body on error since we never turned it in the first place
+                # (We only turn body if we detect thinking tokens in the response)
                 
                 text = "Sorry, my inference backend is unavailable."
                 console.print(f"[red]Inference error:[/red] {inference_error}")
@@ -415,14 +403,18 @@ def run_interactive_loop(
             # Speak the response (or error message)
             # Log the final text being spoken to debug duplicate audio issues
             # Debug: Final text to speak (removed for cleaner output)
+            speech_duration = 0.0
             try:
-                robot.speak(text)
+                speech_duration = robot.speak(text)
             except Exception:
                 pass  # Don't break on TTS failure
 
             # Reset robot to neutral position after response
-            # Wait a bit more to ensure gesture is fully complete
-            time.sleep(0.3)
+            # Wait for speech to complete, plus a small buffer for gesture completion
+            if speech_duration > 0:
+                time.sleep(speech_duration + 0.2)
+            else:
+                time.sleep(0.5)  # Fallback delay if duration unknown
             try:
                 robot.reset()
             except Exception:
