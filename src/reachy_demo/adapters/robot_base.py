@@ -13,10 +13,20 @@ class RobotAdapter(ABC):
     def gesture(self, name: str) -> None: ...
 
     @abstractmethod
-    def speak(self, text: str) -> None: ...
+    def speak(self, text: str) -> float: 
+        """Speak text and return audio duration in seconds."""
+        ...
 
     @abstractmethod
     def reset(self) -> None: ...
 
     @abstractmethod
     def calibrate_home(self) -> None: ...
+    
+    def thinking_pose(self) -> None:
+        """Turn body to the side to indicate thinking. Optional - can be overridden."""
+        pass
+    
+    def return_from_thinking(self) -> None:
+        """Return body from thinking pose to neutral. Optional - can be overridden."""
+        pass

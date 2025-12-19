@@ -11,9 +11,9 @@ from .adapters.robot_rest import ReachyDaemonREST
 from .obs.metrics import start_metrics_server
 from .orchestrator.loop import run_interactive_loop
 
-# Configure logging for robot adapter
+# Configure logging - only show warnings and errors
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,
     format='%(levelname)s: %(message)s'
 )
 
@@ -51,7 +51,13 @@ def run(
         max_retries=s.aim_max_retries,
     )
     robot = _make_robot(s)
-    run_interactive_loop(aim=aim, robot=robot, model=s.aim_model, e2e_slo_ms=s.e2e_slo_ms, max_tokens=s.aim_max_tokens)
+    run_interactive_loop(
+        aim=aim,
+        robot=robot,
+        model=s.aim_model,
+        e2e_slo_ms=s.e2e_slo_ms,
+        max_tokens=s.aim_max_tokens,
+    )
 
 if __name__ == "__main__":
     app()

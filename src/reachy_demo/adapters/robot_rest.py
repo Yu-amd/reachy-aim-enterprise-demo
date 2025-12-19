@@ -7,6 +7,7 @@ import logging
 import threading
 import subprocess
 import re
+import math
 from typing import Dict, Any, Optional
 from .robot_base import RobotAdapter
 
@@ -20,6 +21,16 @@ except ImportError:
     PYTTSX3_AVAILABLE = False
     pyttsx3 = None
 
+# Try to import piper-tts for natural voice (best quality)
+# Optional dependency: pip install piper-tts pyaudio
+try:
+    from piper import PiperVoice  # type: ignore
+    from piper.download import ensure_voice_exists, find_voice  # type: ignore
+    PIPER_AVAILABLE = True
+except ImportError:
+    PIPER_AVAILABLE = False
+    PiperVoice = None
+
 class ReachyDaemonREST(RobotAdapter):
     """REST adapter against reachy-mini-daemon.
 
@@ -30,10 +41,14 @@ class ReachyDaemonREST(RobotAdapter):
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
         self._startup_logged = False
-        self._tts_method: Optional[str] = None  # "daemon" or "system" or None
+        self._tts_method: Optional[str] = None  # "daemon", "piper", "system", or None
         self._tts_engine = None
         self._tts_checked = False
         self._tts_daemon_endpoint: Optional[str] = None
+        self._piper_voice = None  # Piper voice model
+        self._talk_motion_active = False  # Track if talk motion is running
+        self._tts_lock = threading.Lock()  # Prevent concurrent TTS calls
+        self._current_tts_processes = []  # Track running TTS processes to kill on overlap
         self._home_pose: Optional[Dict[str, Any]] = None  # Cache home position
         self._home_pose_captured = False  # Track if we've captured home pose
 
@@ -71,7 +86,7 @@ class ReachyDaemonREST(RobotAdapter):
             return False
     
     def _check_tts_availability(self) -> None:
-        """Check which TTS method is available: daemon API first, then system TTS."""
+        """Check which TTS method is available: daemon API first, then Piper, then espeak fallback."""
         if self._tts_checked:
             return
         
@@ -98,7 +113,25 @@ class ReachyDaemonREST(RobotAdapter):
             except Exception:
                 continue
         
-        # Fall back to system TTS (pyttsx3)
+        # Try Piper TTS (best quality, natural voice)
+        if PIPER_AVAILABLE:
+            try:
+                # Try to load a default voice (en_US-lessac-medium)
+                voice_name = "en_US-lessac-medium"
+                try:
+                    ensure_voice_exists(voice_name, ["./voices", "~/.local/share/piper/voices"])
+                    voice_path = find_voice(voice_name, ["./voices", "~/.local/share/piper/voices"])
+                    if voice_path:
+                        self._piper_voice = PiperVoice.load(voice_path)
+                        self._tts_method = "piper"
+                        logger.info(f"✓ TTS: Using Piper (natural voice: {voice_name})")
+                        return
+                except Exception as e:
+                    logger.debug(f"Piper voice {voice_name} not found: {e}, trying espeak fallback")
+            except Exception as e:
+                logger.debug(f"Piper initialization failed: {e}, trying espeak fallback")
+        
+        # Fall back to espeak (just works)
         if PYTTSX3_AVAILABLE:
             try:
                 self._tts_engine = pyttsx3.init()
@@ -171,7 +204,7 @@ class ReachyDaemonREST(RobotAdapter):
                         self._tts_engine.setProperty('voice', selected_voice.id)
                         logger.info(f"✓ TTS: Using American English voice: {selected_voice.name} (ID: {selected_voice.id})")
                 self._tts_method = "system"
-                logger.info("✓ TTS: Using system TTS (pyttsx3) - daemon API not available")
+                logger.info("✓ TTS: Using system TTS (pyttsx3/espeak) - daemon API and Piper not available")
             except Exception as e:
                 logger.warning(f"⚠ TTS: System TTS initialization failed: {e}")
                 self._tts_method = None
@@ -916,22 +949,24 @@ class ReachyDaemonREST(RobotAdapter):
             pass
 
     def _ack_gesture(self) -> None:
-        """Acknowledgment gesture: very quick nod for immediate feedback (<100ms)."""
+        """Acknowledgment gesture: very quick antenna wiggle for immediate feedback (<100ms)."""
         try:
             state = self.get_state()
-            current_pose = state.get("head_pose", {})
-            current_pitch = current_pose.get("pitch", 0.0)
+            current_antennas = state.get("antennas_position", [0.0, 0.0])
             
-            # Very quick, small nod down
+            # Very quick, small antenna wiggle
             self._move_to_pose(
-                head_pose={**current_pose, "pitch": current_pitch - 0.15},
+                antennas=[
+                    current_antennas[0] + 0.1 if len(current_antennas) > 0 else 0.1,
+                    current_antennas[1] - 0.1 if len(current_antennas) > 1 else -0.1
+                ],
                 duration=0.08  # Very fast
             )
             time.sleep(0.02)
             
             # Quick return
             self._move_to_pose(
-                head_pose=current_pose,
+                antennas=current_antennas,
                 duration=0.08
             )
         except Exception:
@@ -1146,35 +1181,184 @@ class ReachyDaemonREST(RobotAdapter):
         except Exception:
             pass
 
-    def speak(self, text: str) -> None:
-        """Speak text using available TTS method.
+    def speak(self, text: str) -> float:
+        """Speak text using available TTS method and return audio duration in seconds.
         
         Priority:
         1. Reachy daemon API (if available) - uses robot's built-in audio
-        2. System TTS (pyttsx3) - fallback for offline TTS
+        2. Piper TTS (best quality, natural voice) - default for host speaker
+        3. Espeak (just works) - fallback
         
-        The method is automatically detected at startup.
+        Also runs speech-synced robot motion (micro-movements, antenna wiggles) during speech.
+        This makes it look like the robot is talking even when audio comes from host.
+        
+        Returns:
+            float: Estimated audio duration in seconds
         """
         if not text or not text.strip():
             logger.debug("TTS: Empty text, skipping")
-            return
+            return 0.0
         
-        # Log the full text being spoken for debugging
-        logger.info(f"🔊 TTS: Speaking full text ({len(text)} chars): '{text}'")
+        # Clean markdown formatting for natural speech
+        # Remove asterisks (*) used for bold/italic, underscores (_), and other markdown
+        text = re.sub(r'\*+', '', text)  # Remove asterisks
+        text = re.sub(r'_+', '', text)   # Remove underscores
+        text = re.sub(r'`+', '', text)   # Remove backticks
+        text = re.sub(r'#+\s*', '', text)  # Remove markdown headers
+        text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)  # Convert [link](url) to just "link"
+        text = re.sub(r'\s+', ' ', text)  # Normalize whitespace
+        text = text.strip()
         
-        # Check TTS availability if not already checked
-        if not self._tts_checked:
-            self._check_tts_availability()
+        if not text:
+            logger.debug("TTS: Text became empty after cleaning, skipping")
+            return 0.0
         
-        if self._tts_method == "daemon":
-            self._speak_via_daemon(text)
-        elif self._tts_method == "system":
-            self._speak_via_system(text)
-        else:
-            logger.warning(f"🔊 TTS unavailable: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+        # Use lock to prevent concurrent TTS calls (which cause overlapping audio)
+        with self._tts_lock:
+            # Kill any existing TTS processes to prevent overlap
+            self._kill_tts_processes()
+            
+            # Log the full text being spoken for debugging (only in debug mode)
+            logger.debug(f"🔊 TTS: Speaking full text ({len(text)} chars): '{text}'")
+            
+            # Check TTS availability if not already checked
+            if not self._tts_checked:
+                self._check_tts_availability()
+            
+            # Estimate duration based on text length (rough: ~150 words per minute = 2.5 words/sec)
+            # Average word length ~5 chars, so ~12.5 chars/sec, or ~0.08 sec/char
+            estimated_duration = max(0.5, len(text) * 0.08)
+            
+            # Start speech-synced motion loop in parallel
+            motion_thread = None
+            if self.health():
+                motion_thread = threading.Thread(
+                    target=self._talk_motion_loop,
+                    args=(estimated_duration,),
+                    daemon=True
+                )
+                motion_thread.start()
+            
+            # Speak using available method
+            actual_duration = estimated_duration
+            if self._tts_method == "daemon":
+                actual_duration = self._speak_via_daemon(text)
+            elif self._tts_method == "piper":
+                actual_duration = self._speak_via_piper(text)
+            elif self._tts_method == "system":
+                actual_duration = self._speak_via_system(text)
+            else:
+                logger.warning(f"🔊 TTS unavailable: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+            
+            # Wait for motion to complete if it's still running
+            if motion_thread and motion_thread.is_alive():
+                # Adjust motion duration if actual audio duration differs
+                if abs(actual_duration - estimated_duration) > 0.5:
+                    # Motion loop will check _talk_motion_active flag
+                    time.sleep(actual_duration - estimated_duration)
+            
+            return actual_duration
     
-    def _speak_via_daemon(self, text: str) -> None:
-        """Speak text via Reachy daemon API."""
+    def _kill_tts_processes(self) -> None:
+        """Kill any running TTS processes to prevent audio overlap."""
+        try:
+            for proc in self._current_tts_processes:
+                try:
+                    if proc.poll() is None:  # Process is still running
+                        proc.kill()
+                        proc.wait(timeout=1.0)
+                except Exception:
+                    pass
+            self._current_tts_processes.clear()
+        except Exception:
+            pass
+    
+    def _talk_motion_loop(self, duration: float) -> None:
+        """Run speech-synced robot motion during speech.
+        
+        Creates small head micro-movements and antenna wiggles to make it look
+        like the robot is talking, even when audio comes from host speakers.
+        """
+        self._talk_motion_active = True
+        start_time = time.time()
+        
+        try:
+            # Get initial state
+            state = self.get_state()
+            initial_pose = state.get("head_pose", {})
+            initial_antennas = state.get("antennas_position", [0.0, 0.0])
+            initial_pitch = initial_pose.get("pitch", 0.0)
+            initial_yaw = initial_pose.get("yaw", 0.0)
+            initial_roll = initial_pose.get("roll", 0.0)
+            
+            # Motion parameters
+            micro_movement_range = 0.08  # Small head movements
+            antenna_wiggle_range = 0.15  # Antenna wiggle range
+            motion_interval = 0.4  # Move every 400ms
+            pause_between_phrases = 0.3  # Pause between phrases
+            
+            motion_count = 0
+            last_motion_time = start_time
+            
+            while self._talk_motion_active and (time.time() - start_time) < duration:
+                current_time = time.time()
+                elapsed = current_time - start_time
+                remaining = duration - elapsed
+                
+                # Check if we should pause (between phrases)
+                if motion_count > 0 and (current_time - last_motion_time) < pause_between_phrases:
+                    time.sleep(0.1)
+                    continue
+                
+                # Antenna wiggles only (no head movements)
+                if (current_time - last_motion_time) >= motion_interval:
+                    try:
+                        # Antenna wiggles (if safe - check current position)
+                        antenna_left = initial_antennas[0] if len(initial_antennas) > 0 else 0.0
+                        antenna_right = initial_antennas[1] if len(initial_antennas) > 1 else 0.0
+                        
+                        # Safe antenna wiggle (don't go too far)
+                        if abs(antenna_left) < 0.3 and abs(antenna_right) < 0.3:
+                            antenna_left_variation = random.uniform(-antenna_wiggle_range, antenna_wiggle_range)
+                            antenna_right_variation = random.uniform(-antenna_wiggle_range, antenna_wiggle_range)
+                            new_antennas = [
+                                max(-0.4, min(0.4, antenna_left + antenna_left_variation)),
+                                max(-0.4, min(0.4, antenna_right + antenna_right_variation))
+                            ]
+                        else:
+                            # Keep antennas close to current position if already far
+                            new_antennas = initial_antennas
+                        
+                        # Apply antenna movement only (no head movement)
+                        self._move_to_pose(
+                            antennas=new_antennas,
+                            duration=0.15  # Quick, subtle movements
+                        )
+                        
+                        motion_count += 1
+                        last_motion_time = current_time
+                    except Exception as e:
+                        logger.debug(f"Talk motion error (non-critical): {e}")
+                
+                time.sleep(0.1)  # Small sleep to avoid busy-waiting
+            
+            # Return to initial position
+            try:
+                self._move_to_pose(
+                    head_pose=initial_pose,
+                    antennas=initial_antennas,
+                    duration=0.2
+                )
+            except Exception:
+                pass
+                
+        except Exception as e:
+            logger.debug(f"Talk motion loop error (non-critical): {e}")
+        finally:
+            self._talk_motion_active = False
+    
+    def _speak_via_daemon(self, text: str) -> float:
+        """Speak text via Reachy daemon API. Returns audio duration in seconds."""
         try:
             logger.debug(f"🔊 Speaking via daemon: '{text[:50]}{'...' if len(text) > 50 else ''}'")
             response = self._post(
@@ -1182,6 +1366,8 @@ class ReachyDaemonREST(RobotAdapter):
                 json={"text": text}
             )
             response.raise_for_status()
+            # Estimate duration (daemon doesn't return it)
+            return max(0.5, len(text) * 0.08)
         except Exception as e:
             logger.warning(f"⚠ Daemon TTS error, falling back to system TTS: {e}")
             # Fall back to system TTS if daemon fails
@@ -1193,20 +1379,184 @@ class ReachyDaemonREST(RobotAdapter):
                 except Exception:
                     pass
             if self._tts_engine is not None:
-                self._speak_via_system(text)
+                return self._speak_via_system(text)
             else:
                 logger.error("⚠ TTS failed: daemon error and system TTS not available")
+                return max(0.5, len(text) * 0.08)
     
-    def _speak_via_system(self, text: str) -> None:
-        """Speak text via system TTS (pyttsx3) - non-blocking.
+    def _speak_via_piper(self, text: str) -> float:
+        """Speak text via Piper TTS (best quality, natural voice). Returns audio duration in seconds."""
+        if not PIPER_AVAILABLE or self._piper_voice is None:
+            logger.warning("⚠ Piper TTS not available, falling back to espeak")
+            return self._speak_via_espeak(text)
+        
+        try:
+            import io
+            import wave
+            try:
+                import pyaudio  # type: ignore
+            except ImportError:
+                pyaudio = None
+            
+            logger.debug(f"🔊 Speaking via Piper TTS: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+            
+            # Generate audio with Piper
+            audio_stream = io.BytesIO()
+            self._piper_voice.synthesize(text, audio_stream)
+            audio_stream.seek(0)
+            
+            # Play audio using pyaudio
+            try:
+                if pyaudio is None:
+                    raise ImportError("pyaudio not available")
+                p = pyaudio.PyAudio()
+                wf = wave.open(audio_stream, 'rb')
+                
+                # Open audio stream
+                stream = p.open(
+                    format=p.get_format_from_width(wf.getsampwidth()),
+                    channels=wf.getnchannels(),
+                    rate=wf.getframerate(),
+                    output=True
+                )
+                
+                # Play audio
+                start_time = time.time()
+                data = wf.readframes(1024)
+                while data:
+                    stream.write(data)
+                    data = wf.readframes(1024)
+                
+                # Cleanup
+                stream.stop_stream()
+                stream.close()
+                p.terminate()
+                wf.close()
+                
+                duration = time.time() - start_time
+                logger.debug(f"✓ Piper TTS completed in {duration:.2f}s")
+                return duration
+            except ImportError:
+                # pyaudio not available, try aplay fallback
+                logger.debug("pyaudio not available, trying aplay fallback")
+                audio_stream.seek(0)
+                aplay_proc = subprocess.Popen(
+                    ['aplay', '-q'],
+                    stdin=audio_stream,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                # Track process
+                self._current_tts_processes = [aplay_proc]
+                aplay_proc.wait(timeout=30)
+                self._current_tts_processes.clear()
+                if aplay_proc.returncode == 0:
+                    return max(0.5, len(text) * 0.08)
+                else:
+                    raise
+        except Exception as e:
+            logger.warning(f"⚠ Piper TTS error: {e}, falling back to espeak")
+            self._kill_tts_processes()
+            return self._speak_via_espeak(text)
+    
+    def _speak_via_espeak(self, text: str) -> float:
+        """Speak text via espeak (just works fallback). Returns audio duration in seconds."""
+        try:
+            logger.debug(f"🔊 Speaking via espeak: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+            
+            # Clean text
+            cleaned_text = re.sub(r'\s+', ' ', text.strip())
+            
+            start_time = time.time()
+            
+            # Try espeak with aplay (best quality)
+            espeak_proc = None
+            aplay_proc = None
+            try:
+                espeak_cmd = ['espeak', '-s', '175', '-a', '150', '--stdout', cleaned_text]
+                aplay_cmd = ['aplay', '-q']
+                
+                espeak_proc = subprocess.Popen(
+                    espeak_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL
+                )
+                aplay_proc = subprocess.Popen(
+                    aplay_cmd,
+                    stdin=espeak_proc.stdout,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                espeak_proc.stdout.close()
+                
+                # Track processes so we can kill them if needed
+                self._current_tts_processes = [espeak_proc, aplay_proc]
+                
+                espeak_proc.wait(timeout=30)
+                aplay_proc.wait(timeout=30)
+                
+                duration = time.time() - start_time
+                if espeak_proc.returncode == 0 and aplay_proc.returncode == 0:
+                    logger.debug(f"✓ Espeak TTS completed in {duration:.2f}s")
+                    self._current_tts_processes.clear()
+                    return duration
+                else:
+                    # Kill processes if they failed
+                    self._kill_tts_processes()
+            except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+                # Kill any running processes before fallback
+                if espeak_proc:
+                    try:
+                        espeak_proc.kill()
+                    except:
+                        pass
+                if aplay_proc:
+                    try:
+                        aplay_proc.kill()
+                    except:
+                        pass
+                self._current_tts_processes.clear()
+                logger.debug(f"espeak+aplay failed: {e}, trying direct espeak")
+            except Exception as e:
+                self._kill_tts_processes()
+                logger.debug(f"espeak+aplay error: {e}, trying direct espeak")
+            
+            # Fallback: espeak directly (only if first attempt failed)
+            # Make sure no processes are running before starting fallback
+            self._kill_tts_processes()
+            time.sleep(0.1)  # Brief pause to ensure audio device is free
+            
+            try:
+                result = subprocess.run(
+                    ['espeak', '-s', '175', '-a', '150', cleaned_text],
+                    timeout=30,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                duration = time.time() - start_time
+                if result.returncode == 0:
+                    logger.debug(f"✓ Espeak TTS completed in {duration:.2f}s")
+                    return duration
+                else:
+                    return max(0.5, len(text) * 0.08)
+            except Exception as e:
+                logger.error(f"⚠ Espeak fallback error: {e}")
+                return max(0.5, len(text) * 0.08)
+        except Exception as e:
+            logger.error(f"⚠ Espeak TTS error: {e}")
+            self._kill_tts_processes()
+            return max(0.5, len(text) * 0.08)
+    
+    def _speak_via_system(self, text: str) -> float:
+        """Speak text via system TTS (espeak) - non-blocking.
         
         Note: Audio plays on laptop speakers, not robot speakers.
         The Reachy Mini daemon does not have TTS endpoints.
-        """
-        if self._tts_engine is None:
-            logger.warning(f"🔊 System TTS unavailable: '{text[:50]}...'")
-            return
         
+        Returns audio duration in seconds.
+        """
+        # Use espeak directly (more reliable than pyttsx3)
+        return self._speak_via_espeak(text)
         # Capture text in closure to avoid scoping issues
         text_to_speak = text
         
@@ -1220,7 +1570,7 @@ class ReachyDaemonREST(RobotAdapter):
                 else:
                     input_text = text_to_speak
                 
-                logger.info(f"🔊 Speaking via system TTS ({len(input_text)} chars): '{input_text[:100]}{'...' if len(input_text) > 100 else ''}'")
+                logger.debug(f"🔊 Speaking via system TTS ({len(input_text)} chars): '{input_text[:100]}{'...' if len(input_text) > 100 else ''}'")
                 
                 # Use pyttsx3 with thread lock to prevent crashes from multiple engine instances
                 # Create a new engine instance for this thread (pyttsx3 is not thread-safe)
@@ -1235,7 +1585,7 @@ class ReachyDaemonREST(RobotAdapter):
                         cleaned_text = re.sub(r'\s+', ' ', input_text.strip())
                         subprocess.run(['espeak', '-s', '175', '-a', '150', cleaned_text],
                                      timeout=30, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        logger.info(f"✓ TTS completed via espeak fallback")
+                        logger.debug(f"✓ TTS completed via espeak fallback")
                         return
                     except Exception:
                         logger.error("⚠ All TTS methods failed")
@@ -1245,7 +1595,7 @@ class ReachyDaemonREST(RobotAdapter):
                 engine.setProperty('rate', 200)  # Default speed
                 # Set volume to maximum (1.0 = 100%)
                 engine.setProperty('volume', 1.0)  # Max volume
-                logger.info(f"TTS properties - rate: {engine.getProperty('rate')}, volume: {engine.getProperty('volume')}")
+                logger.debug(f"TTS properties - rate: {engine.getProperty('rate')}, volume: {engine.getProperty('volume')}")
                 
                 # Try to set an American English voice explicitly (avoid Chinese, prefer American over other accents)
                 voices = engine.getProperty('voices')
@@ -1338,7 +1688,7 @@ class ReachyDaemonREST(RobotAdapter):
                     logger.warning("⚠ TTS: Empty text after cleaning, skipping")
                     return
                 
-                logger.info(f"TTS engine saying ({len(cleaned_text)} chars): '{cleaned_text[:100]}{'...' if len(cleaned_text) > 100 else ''}'")
+                logger.debug(f"TTS engine saying ({len(cleaned_text)} chars): '{cleaned_text[:100]}{'...' if len(cleaned_text) > 100 else ''}'")
                 
                 # Try multiple TTS methods to work around audio system issues
                 speech_text = str(cleaned_text)
@@ -1346,12 +1696,12 @@ class ReachyDaemonREST(RobotAdapter):
                 
                 # Method 1: Try pyttsx3 first
                 try:
-                    logger.info(f"Speaking via pyttsx3: '{speech_text[:50]}...'")
+                    logger.debug(f"Speaking via pyttsx3: '{speech_text[:50]}...'")
                     current_voice = engine.getProperty('voice')
                     logger.debug(f"Using voice: {current_voice}")
                     engine.say(speech_text)
                     engine.runAndWait()
-                    logger.info(f"✓ TTS playback completed via pyttsx3 for {len(cleaned_text)} character text")
+                    logger.debug(f"✓ TTS playback completed via pyttsx3 for {len(cleaned_text)} character text")
                     tts_success = True
                 except Exception as pyttsx_error:
                     logger.warning(f"⚠ pyttsx3 failed: {pyttsx_error}, trying espeak directly...")
@@ -1388,7 +1738,7 @@ class ReachyDaemonREST(RobotAdapter):
                         aplay_proc.wait(timeout=30)
                         
                         if espeak_proc.returncode == 0 and aplay_proc.returncode == 0:
-                            logger.info(f"✓ TTS playback completed via espeak+aplay for {len(cleaned_text)} character text")
+                            logger.debug(f"✓ TTS playback completed via espeak+aplay for {len(cleaned_text)} character text")
                             tts_success = True
                         else:
                             logger.warning(f"⚠ espeak+aplay failed (espeak: {espeak_proc.returncode}, aplay: {aplay_proc.returncode})")
@@ -1416,7 +1766,7 @@ class ReachyDaemonREST(RobotAdapter):
                                 stderr=subprocess.DEVNULL  # Suppress ALSA errors
                             )
                             if result.returncode == 0:
-                                logger.info(f"✓ TTS playback completed via espeak (errors suppressed) for {len(cleaned_text)} character text")
+                                logger.debug(f"✓ TTS playback completed via espeak (errors suppressed) for {len(cleaned_text)} character text")
                                 tts_success = True
                         except Exception:
                             pass
@@ -1440,7 +1790,7 @@ class ReachyDaemonREST(RobotAdapter):
                         retry_engine.setProperty('volume', 1.0)
                         retry_engine.say(speech_text)
                         retry_engine.runAndWait()
-                        logger.info(f"✓ TTS playback completed via pyttsx3 retry for {len(cleaned_text)} character text")
+                        logger.debug(f"✓ TTS playback completed via pyttsx3 retry for {len(cleaned_text)} character text")
                         tts_success = True
                     except Exception as retry_error:
                         logger.error(f"⚠ Audio fix and retry failed: {retry_error}")
@@ -1484,12 +1834,12 @@ class ReachyDaemonREST(RobotAdapter):
             raise
 
     def reset(self) -> None:
-        """Reset robot to the final position of wake_up gesture.
+        """Reset robot to neutral/home position.
         
-        The wake_up gesture ends at the correct neutral position (head, antennas, body).
-        This is simpler and more reliable than doing multiple adjustment passes.
+        Moves directly to neutral position (0.0 for all axes) without any animations or tilts.
+        Uses calibrated home position if available, otherwise uses explicit zeros.
         """
-        logger.info("🤖 Resetting robot using wake_up gesture (ends at correct neutral position)...")
+        logger.info("🤖 Resetting robot to neutral position (no tilt)...")
         
         try:
             # Get state before reset to log the change
@@ -1504,19 +1854,33 @@ class ReachyDaemonREST(RobotAdapter):
             before_antennas = [0.0, 0.0]
             before_body_yaw = 0.0
         
-        # Call wake_up gesture - it ends at the correct neutral position
+        # Move directly to neutral position (no animations, no tilt)
         try:
-            self._post("/api/move/play/wake_up")
-            logger.info("🤖 Wake_up gesture started, waiting for completion...")
+            if self._home_pose_captured and self._home_pose is not None:
+                # Use calibrated home position
+                target_head_pose = self._home_pose.get("head_pose", {})
+                target_antennas = self._home_pose.get("antennas", [0.0, 0.0])
+                target_body_yaw = self._home_pose.get("body_yaw", 0.0)
+                logger.info("🤖 Using calibrated home position for reset")
+            else:
+                # Use explicit zeros for true neutral
+                target_head_pose = {"pitch": 0.0, "yaw": 0.0, "roll": 0.0}
+                target_antennas = [0.0, 0.0]
+                target_body_yaw = 0.0
+                logger.info("🤖 Using explicit zero position for reset")
+            
+            # Move to neutral position smoothly
+            self._move_to_pose(
+                head_pose=target_head_pose,
+                antennas=target_antennas,
+                body_yaw=target_body_yaw,
+                duration=0.5  # Smooth movement
+            )
+            time.sleep(0.6)  # Wait for movement to complete
+            
         except Exception as e:
-            logger.error(f"🤖 Failed to start wake_up gesture: {e}")
+            logger.error(f"🤖 Failed to reset robot: {e}")
             raise
-        
-        # Wait for wake_up to complete
-        # wake_up includes: initial move to INIT_HEAD_POSE, sound, roll animation (20° left then back), return to INIT_HEAD_POSE
-        # Total duration is approximately: initial move (adaptive) + 0.1s + sound + 0.2s roll + 0.2s return = ~1-2 seconds
-        # Add extra buffer for safety
-        time.sleep(2.5)
         
         # Verify final position
         try:
@@ -1525,7 +1889,7 @@ class ReachyDaemonREST(RobotAdapter):
             after_antennas = after_state.get("antennas_position", [0.0, 0.0])
             after_body_yaw = after_state.get("body_yaw", 0.0)
             
-            logger.info(f"🤖 After wake_up: pitch={after_pose.get('pitch', 0.0):.3f}, yaw={after_pose.get('yaw', 0.0):.3f}, roll={after_pose.get('roll', 0.0):.3f}, antennas=[{after_antennas[0] if len(after_antennas) > 0 else 0.0:.3f},{after_antennas[1] if len(after_antennas) > 1 else 0.0:.3f}], body={after_body_yaw:.3f}")
+            logger.info(f"🤖 After reset: pitch={after_pose.get('pitch', 0.0):.3f}, yaw={after_pose.get('yaw', 0.0):.3f}, roll={after_pose.get('roll', 0.0):.3f}, antennas=[{after_antennas[0] if len(after_antennas) > 0 else 0.0:.3f},{after_antennas[1] if len(after_antennas) > 1 else 0.0:.3f}], body={after_body_yaw:.3f}")
             
             # Calculate movement change
             pitch_change = abs(after_pose.get('pitch', 0.0) - before_pose.get('pitch', 0.0))
@@ -1536,4 +1900,66 @@ class ReachyDaemonREST(RobotAdapter):
             logger.info(f"🤖 Reset complete! Movement: pitch={pitch_change:.3f}, yaw={yaw_change:.3f}, roll={roll_change:.3f}, max={max_change:.3f}")
         except Exception as e:
             logger.warning(f"Could not verify reset state: {e}")
-            # Still consider it successful since wake_up completed
+            # Still consider it successful since move completed
+    
+    def thinking_pose(self) -> None:
+        """Turn body and head 90 degrees to the side to indicate thinking (very prominent)."""
+        try:
+            state = self.get_state()
+            current_pose = state.get("head_pose", {})
+            current_body_yaw = state.get("body_yaw", 0.0)
+            current_head_yaw = current_pose.get("yaw", 0.0)
+            
+            # Turn both body and head 90 degrees (π/2 radians) to the side
+            # This is a very prominent, clear thinking pose
+            # Explicitly set roll to 0 to prevent any side tilt
+            ninety_degrees = math.pi / 2  # ~1.57 radians
+            thinking_body_yaw = current_body_yaw + ninety_degrees
+            thinking_head_yaw = current_head_yaw + ninety_degrees
+            
+            logger.debug(f"🤖 Turning body and head 90° to thinking pose: body={thinking_body_yaw:.3f}, head_yaw={thinking_head_yaw:.3f}")
+            self._move_to_pose(
+                head_pose={
+                    **current_pose,
+                    "yaw": thinking_head_yaw,
+                    "roll": 0.0,  # Explicitly no side tilt
+                    "pitch": current_pose.get("pitch", 0.0)  # Keep current pitch
+                },
+                body_yaw=thinking_body_yaw,
+                duration=0.6  # Smooth turn for 90 degree movement
+            )
+        except Exception as e:
+            logger.debug(f"Thinking pose error (non-critical): {e}")
+    
+    def return_from_thinking(self) -> None:
+        """Return body and head from thinking pose to neutral."""
+        try:
+            state = self.get_state()
+            current_pose = state.get("head_pose", {})
+            current_body_yaw = state.get("body_yaw", 0.0)
+            
+            # Return to neutral (0.0) or use calibrated home if available
+            if self._home_pose_captured and self._home_pose is not None:
+                target_body_yaw = self._home_pose.get("body_yaw", 0.0)
+                home_head_pose = self._home_pose.get("head_pose", {})
+                target_head_yaw = home_head_pose.get("yaw", 0.0)
+                target_head_roll = home_head_pose.get("roll", 0.0)
+                target_head_pitch = home_head_pose.get("pitch", 0.0)
+            else:
+                target_body_yaw = 0.0
+                target_head_yaw = 0.0
+                target_head_roll = 0.0
+                target_head_pitch = current_pose.get("pitch", 0.0)  # Keep current pitch
+            
+            logger.debug(f"🤖 Returning body and head from thinking pose: body={current_body_yaw:.3f} -> {target_body_yaw:.3f}, head_yaw={current_pose.get('yaw', 0.0):.3f} -> {target_head_yaw:.3f}, roll -> {target_head_roll:.3f}")
+            self._move_to_pose(
+                head_pose={
+                    "yaw": target_head_yaw,
+                    "roll": target_head_roll,  # Explicitly reset roll to 0 (or home)
+                    "pitch": target_head_pitch
+                },
+                body_yaw=target_body_yaw,
+                duration=0.5  # Smooth return
+            )
+        except Exception as e:
+            logger.debug(f"Return from thinking error (non-critical): {e}")

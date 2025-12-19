@@ -14,11 +14,11 @@ Latency Budget (Target E2E: 2500ms):
 - Post-processing + action decision: 20-50ms
 - Robot gesture command: 50-250ms
 
-Gesture Tiers:
-- Tier 0 (fast): <800ms → quick nod (ack)
-- Tier 1 (normal): 800-2500ms → nod + slight head tilt (engaged)
-- Tier 2 (slow): >2500ms → thinking loop or hold gesture
-- Error: inference failures → shake/no or sad posture
+Gesture Tiers (Enterprise-Responsive):
+- Tier 0 (fast): <800ms → ack + quick nod (nod_fast)
+- Tier 1 (normal): 800-2500ms → ack + engaged tilt (nod_tilt)
+- Tier 2 (slow): >2500ms → ack + "thinking hold" then done (thinking_done)
+- Error: inference failures → shake/no or sad posture (error)
 """
 
 from __future__ import annotations

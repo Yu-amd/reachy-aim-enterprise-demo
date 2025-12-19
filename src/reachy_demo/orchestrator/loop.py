@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import time
 import re
+import logging
 from typing import List, Dict
 
 from rich.console import Console
 from rich.panel import Panel
 
+logger = logging.getLogger(__name__)
+
 from ..aim.client import AIMClient
 from ..obs.metrics import (
-    EDGE_E2E_MS, AIM_CALL_MS, REQUESTS, ERRORS, SLO_MISS,
+    EDGE_E2E_MS, LLM_CALL_MS, AIM_CALL_MS, REQUESTS, ERRORS, SLO_MISS,
     BACKEND_FAILURES, GESTURE_SELECTED
 )
 from ..adapters.robot_base import RobotAdapter
@@ -69,7 +72,7 @@ def _handle_direct_command(cmd_text: str, robot: RobotAdapter, console: Console)
                 # Get initial state
                 initial_state = robot.get_state()
                 initial_pose = initial_state.get("head_pose", {})
-                console.print(f"[dim]Initial state: pitch={initial_pose.get('pitch', 0.0):.3f}, yaw={initial_pose.get('yaw', 0.0):.3f}, roll={initial_pose.get('roll', 0.0):.3f}[/dim]")
+                # Debug: Initial state (removed for cleaner output)
                 
                 robot.reset()
                 
@@ -94,12 +97,11 @@ def _handle_direct_command(cmd_text: str, robot: RobotAdapter, console: Console)
                 # Calculate antenna errors for display
                 antenna_left = antennas[0] if len(antennas) > 0 else 0.0
                 antenna_right = antennas[1] if len(antennas) > 1 else 0.0
-                console.print(f"[dim]Final state: pitch={head_pose.get('pitch', 0.0):.3f}, yaw={head_pose.get('yaw', 0.0):.3f}, roll={head_pose.get('roll', 0.0):.3f}[/dim]")
-                console.print(f"[dim]Antennas: left={antenna_left:.3f}, right={antenna_right:.3f}, body={body_yaw:.3f}[/dim]")
+                # Debug: Final state and antennas (removed for cleaner output)
             except Exception as e:
                 import traceback
                 console.print(f"[red]✗ Reset failed:[/red] {e}")
-                console.print(f"[dim]{traceback.format_exc()}[/dim]")
+                logger.debug(traceback.format_exc())
                 console.print("[yellow]Tip: Check that the daemon is running and accessible. Try 'cmd:state' to verify connection.[/yellow]")
                 console.print("[yellow]Enable debug logging with: export PYTHONPATH=src && python -m reachy_demo.main --log-level DEBUG[/yellow]")
             
@@ -166,6 +168,7 @@ def run_interactive_loop(
     """
     convo: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
     policy = LatencyPolicy()
+    is_thinking_model = False  # Track if model is a thinking model (False = assume non-thinking until detected)
 
     console.print(Panel.fit(
         "Reachy Enterprise Demo (Enterprise-Responsive)\n"
@@ -182,7 +185,7 @@ def run_interactive_loop(
             user_text = console.input("\n[bold cyan]You> [/bold cyan]").strip()
             if not user_text:
                 continue
-
+            
             # Check for direct command (bypasses LLM)
             if user_text.lower().startswith("cmd:"):
                 _handle_direct_command(user_text, robot, console)
@@ -203,6 +206,14 @@ def run_interactive_loop(
             convo.append({"role": "user", "content": user_text})
             messages = convo[-20:]  # bounded context
 
+            # Turn body to side to indicate thinking (only if model is a thinking model)
+            # We start assuming it's NOT a thinking model, and only turn body if we detect thinking tokens
+            if is_thinking_model:
+                try:
+                    robot.thinking_pose()
+                except Exception:
+                    pass  # Don't break on thinking pose failure
+
             # Call inference endpoint
             t1 = time.perf_counter()
             ok = False
@@ -214,54 +225,151 @@ def run_interactive_loop(
                 t2 = time.perf_counter()
                 ok = True
                 aim_ms = (t2 - t1) * 1000.0
-                AIM_CALL_MS.observe(aim_ms)
+                # Record LLM call latency (enterprise metrics)
+                LLM_CALL_MS.observe(aim_ms)
+                AIM_CALL_MS.observe(aim_ms)  # Backward compatibility
+                
                 text = resp.text.strip()
-                
-                # Strip thinking tokens if present (common formats)
-                # Some models wrap thinking in tags like [thinking]...[/thinking] or <think>...</think>
-                thinking_patterns = [
-                    r'\[thinking\].*?\[/thinking\]',
-                    r'<think>.*?</think>',
-                    r'<thinking>.*?</thinking>',
-                    r'```thinking.*?```',
-                ]
-                
                 original_text = text
-                for pattern in thinking_patterns:
-                    import re
-                    text = re.sub(pattern, '', text, flags=re.DOTALL | re.IGNORECASE)
                 
-                # Also check for common thinking markers at the start
-                # If text starts with thinking-like patterns, try to find where actual response begins
-                thinking_markers = [
-                    'let me think',
-                    'thinking:',
-                    'reasoning:',
-                    'considering:',
+                # Check if this is a thinking model by detecting thinking tokens in the raw response
+                thinking_patterns = [
+                    r'\[thinking\].*?\[/thinking\]',  # [thinking]...[/thinking]
+                    r'<think>.*?</think>',  # <think>...</think>
+                    r'<thinking>.*?</thinking>',  # <thinking>...</thinking>
+                    r'```thinking.*?```',  # ```thinking...```
+                    r'\[thinking\].*',  # [thinking]... (unclosed, to end of text)
+                    r'<thinking>.*',  # <thinking>... (unclosed, to end of text)
                 ]
-                text_lower = text.lower()
-                for marker in thinking_markers:
-                    if text_lower.startswith(marker):
-                        # Try to find where thinking ends (look for sentence breaks or newlines)
-                        # Find first sentence after thinking
-                        sentences = re.split(r'[.!?]\s+', text, maxsplit=2)
-                        if len(sentences) > 1:
-                            # Skip first sentence if it's clearly thinking
-                            if marker in sentences[0].lower():
-                                text = '. '.join(sentences[1:])
-                                break
+                
+                thinking_delimiters = [
+                    r'\[/thinking\]',
+                    r'</thinking>',
+                    r'</think>',
+                ]
+                
+                # Detect if this response contains thinking tokens
+                has_thinking_tokens = False
+                for pattern in thinking_patterns:
+                    if re.search(pattern, original_text, flags=re.DOTALL | re.IGNORECASE):
+                        has_thinking_tokens = True
+                        break
+                if not has_thinking_tokens:
+                    for delimiter in thinking_delimiters:
+                        if re.search(delimiter, original_text, flags=re.IGNORECASE):
+                            has_thinking_tokens = True
+                            break
+                
+                # Update thinking model detection: if we find thinking tokens, mark as thinking model
+                if has_thinking_tokens and not is_thinking_model:
+                    is_thinking_model = True
+                    logger.debug(f"🤖 Detected thinking model: thinking tokens found in response")
+                
+                # Return body from thinking pose (only if we turned it)
+                if is_thinking_model:
+                    try:
+                        robot.return_from_thinking()
+                    except Exception:
+                        pass  # Don't break on return from thinking failure
+                
+                # Aggressively strip ALL thinking tokens (handle multiple occurrences)
+                # Some models wrap thinking in tags like [thinking]...[/thinking] or <think>...</think>
+                # We need to remove ALL occurrences, not just the first one
+                # Apply patterns multiple times until no more matches (handle nested/overlapping)
+                max_iterations = 10
+                for iteration in range(max_iterations):
+                    text_before = text
+                    for pattern in thinking_patterns:
+                        text = re.sub(pattern, '', text, flags=re.DOTALL | re.IGNORECASE)
+                    # Stop if no more changes
+                    if text == text_before:
+                        break
+                
+                # Also remove thinking markers at the start or anywhere
+                thinking_markers = [
+                    r'let me think[^.!?]*[.!?]?\s*',
+                    r'thinking:[^.!?]*[.!?]?\s*',
+                    r'reasoning:[^.!?]*[.!?]?\s*',
+                    r'considering:[^.!?]*[.!?]?\s*',
+                ]
+                for marker_pattern in thinking_markers:
+                    text = re.sub(marker_pattern, '', text, flags=re.IGNORECASE)
                 
                 text = text.strip()
                 
-                # If we stripped thinking but got empty text, use original
+                # If we have multiple sentences and thinking might have appeared in the middle,
+                # take only the last part (after the last thinking block)
+                # Split by common thinking delimiters and take the last meaningful part
+                # BUT: Only do this if we actually found thinking blocks, to avoid corrupting normal text
+                # Check if any thinking delimiters exist before splitting
+                has_thinking = any(re.search(delimiter, text, flags=re.IGNORECASE) for delimiter in thinking_delimiters)
+                
+                if has_thinking:
+                    # Only split if we actually have thinking blocks
+                    for delimiter in thinking_delimiters:
+                        parts = re.split(delimiter, text, flags=re.IGNORECASE)
+                        if len(parts) > 1:
+                            # Take the last part (after the last thinking block)
+                            text = parts[-1].strip()
+                
+                # Clean up: remove any remaining thinking artifacts
+                text = re.sub(r'\s*\[thinking\]\s*', '', text, flags=re.IGNORECASE)
+                text = re.sub(r'\s*<thinking>\s*', '', text, flags=re.IGNORECASE)
+                text = re.sub(r'\s*\[/thinking\]\s*', '', text, flags=re.IGNORECASE)
+                text = re.sub(r'\s*</thinking>\s*', '', text, flags=re.IGNORECASE)
+                text = re.sub(r'\s*<think>\s*', '', text, flags=re.IGNORECASE)
+                text = re.sub(r'\s*</think>\s*', '', text, flags=re.IGNORECASE)
+                
+                # Normalize whitespace (but be careful not to create duplicates)
+                text = re.sub(r'\s+', ' ', text).strip()
+                
+                # Final check: ensure text doesn't contain duplicate sentences
+                # Split by sentence boundaries and remove duplicates
+                sentences = re.split(r'([.!?]+)', text)
+                if len(sentences) > 3:
+                    # Reconstruct, but skip obvious duplicates
+                    seen = set()
+                    unique_sentences = []
+                    for i in range(0, len(sentences) - 1, 2):
+                        if i + 1 < len(sentences):
+                            sentence = (sentences[i] + sentences[i + 1]).strip()
+                            sentence_lower = sentence.lower()
+                            # Only add if we haven't seen this sentence before (fuzzy match)
+                            if sentence_lower not in seen and len(sentence) > 5:
+                                seen.add(sentence_lower)
+                                unique_sentences.append(sentence)
+                    if unique_sentences:
+                        text = ' '.join(unique_sentences).strip()
+                
+                # If we stripped thinking but got empty or very short text, use original
+                # But try to extract just the final response part
                 if not text or len(text) < 10:
+                    # Try to find the last complete sentence that doesn't look like thinking
+                    sentences = re.split(r'([.!?]+)', original_text)
+                    # Reconstruct sentences
+                    clean_sentences = []
+                    for i in range(0, len(sentences) - 1, 2):
+                        if i + 1 < len(sentences):
+                            sentence = (sentences[i] + sentences[i + 1]).strip()
+                            # Skip sentences that look like thinking
+                            sentence_lower = sentence.lower()
+                            if not any(marker in sentence_lower for marker in ['thinking', 'reasoning', 'considering', '[thinking', '<thinking']):
+                                clean_sentences.append(sentence)
+                    
+                    if clean_sentences:
+                        # Take last 2-3 sentences
+                        text = ' '.join(clean_sentences[-3:]).strip()
+                    else:
+                        # Last resort: use original but try to clean it
+                        text = original_text.strip()
+                        # Remove obvious thinking markers
+                        for marker in ['[thinking]', '[/thinking]', '<thinking>', '</thinking>']:
+                            text = text.replace(marker, '')
+                        text = re.sub(r'\s+', ' ', text).strip()
+                
+                # Final cleanup: ensure we have valid text
+                if not text or len(text.strip()) < 5:
                     text = original_text.strip()
-                    # Last resort: take last 2-3 sentences
-                    sentences = re.split(r'[.!?]+', text)
-                    if len(sentences) > 2:
-                        text = '. '.join(sentences[-3:]).strip()
-                        if text and not text.endswith('.'):
-                            text += '.'
                 
                 # Check if response was truncated (hit token limit)
                 # Some models include thinking tokens that count toward max_tokens
@@ -279,6 +387,14 @@ def run_interactive_loop(
                 ok = False
                 ERRORS.inc()
                 BACKEND_FAILURES.inc()
+                
+                # Return body from thinking pose even on error (only if we turned it)
+                if is_thinking_model:
+                    try:
+                        robot.return_from_thinking()
+                    except Exception:
+                        pass  # Don't break on return from thinking failure
+                
                 text = "Sorry, my inference backend is unavailable."
                 console.print(f"[red]Inference error:[/red] {inference_error}")
 
@@ -288,17 +404,17 @@ def run_interactive_loop(
             if e2e_ms > e2e_slo_ms:
                 SLO_MISS.inc()
 
-            # Select post-gesture based on latency and success
+            # Note: Post-gesture removed - only ack gesture and reset are used
+            # Metrics still tracked for monitoring
             try:
                 post_gesture = policy.choose_post_gesture(aim_ms, e2e_ms, ok)
-                robot.gesture(post_gesture)
-                GESTURE_SELECTED.labels(gesture=post_gesture).inc()
-                # Wait a bit for gesture to complete (gestures have internal timing)
-                time.sleep(0.5)  # Give gesture time to finish
+                GESTURE_SELECTED.labels(gesture=post_gesture).inc()  # Track for metrics only
             except Exception:
-                pass  # Don't break on gesture failure
+                pass  # Don't break on metrics failure
 
             # Speak the response (or error message)
+            # Log the final text being spoken to debug duplicate audio issues
+            # Debug: Final text to speak (removed for cleaner output)
             try:
                 robot.speak(text)
             except Exception:

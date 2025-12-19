@@ -6,16 +6,27 @@ from prometheus_client import Histogram, Counter, start_http_server
 
 logger = logging.getLogger(__name__)
 
+# Enterprise metrics - exposed for monitoring and SLO tracking
 EDGE_E2E_MS = Histogram(
     "edge_e2e_ms",
-    "End-to-end latency from user input to response",
+    "End-to-end latency from user input to response (milliseconds)",
     buckets=(50,100,200,400,800,1200,2000,3000,5000,8000),
 )
+
+LLM_CALL_MS = Histogram(
+    "llm_call_ms",
+    "Latency of LLM inference call (milliseconds)",
+    buckets=(50,100,200,400,800,1200,2000,3000,5000,8000),
+)
+
+# Backward compatibility alias (AIM is the LLM endpoint)
+# Note: Both metrics record the same data for compatibility
 AIM_CALL_MS = Histogram(
     "aim_call_ms",
-    "Latency of AIM API call",
+    "Latency of AIM API call (milliseconds) - alias for llm_call_ms",
     buckets=(50,100,200,400,800,1200,2000,3000,5000,8000),
 )
+
 REQUESTS = Counter("edge_requests_total", "Total requests handled by edge client")
 ERRORS = Counter("edge_errors_total", "Total errors in edge client")
 SLO_MISS = Counter("edge_slo_miss_total", "Count of e2e latency SLO misses")

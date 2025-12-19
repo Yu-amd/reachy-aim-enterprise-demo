@@ -21,6 +21,21 @@ def _env_int(key: str, default: int) -> int:
     except ValueError:
         return default
 
+def _env_bool(key: str, default: bool) -> bool:
+    v = _env(key)
+    if v is None:
+        return default
+    return v.lower() in ("true", "1", "yes", "on")
+
+def _env_float(key: str, default: float) -> float:
+    v = _env(key)
+    if v is None:
+        return default
+    try:
+        return float(v)
+    except ValueError:
+        return default
+
 @dataclass(frozen=True)
 class Settings:
     # AIM (OpenAI-compatible)
