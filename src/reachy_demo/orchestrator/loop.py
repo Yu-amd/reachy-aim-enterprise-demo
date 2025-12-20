@@ -8,6 +8,7 @@ import threading
 from typing import List, Dict
 
 from rich.console import Console
+from rich.text import Text
 
 logger = logging.getLogger(__name__)
 
@@ -191,12 +192,14 @@ def run_interactive_loop(
             # Clear terminal before each interaction for clean output
             os.system('clear' if os.name != 'nt' else 'cls')
             
-            # Enterprise header
-            console.print("[cyan]reachy-aim-demo[/cyan]")
-            console.print("[cyan]----------------[/cyan]")
-            console.print()
+            # Enterprise header (plain text, no color)
+            print("reachy-aim-demo")
+            print("----------------")
+            print()
             
-            user_text = input("Prompt: ").strip()
+            # Get user input with prompt label (cyan)
+            console.print("[cyan]Prompt:[/cyan] ", end="")
+            user_text = input().strip()
             if not user_text:
                 continue
             
@@ -236,18 +239,22 @@ def run_interactive_loop(
             else:
                 backend_name = "AIM (OpenAI-compatible)"
             
-            # Show prompt and backend info
-            console.print(f"[cyan]Prompt:[/cyan] {user_text}")
+            # Show backend info (prompt already shown in input line) - cyan for headers
             console.print(f"[cyan]Backend:[/cyan] {backend_name}")
             console.print(f"[cyan]Target SLO:[/cyan] < {e2e_slo_ms/1000.0:.1f}s")
-            console.print()
+            print()
             
             # Immediate feedback: show acknowledgment gesture
             try:
                 pre_gesture = policy.choose_pre_gesture()
                 robot.gesture(pre_gesture)
                 GESTURE_SELECTED.labels(gesture=pre_gesture).inc()
-                console.print("[green][edge][/green] ACK gesture sent")
+                text = Text()
+                text.append("[", style="green")
+                text.append("edge", style="green bold")
+                text.append("]", style="green")
+                text.append(" ACK gesture sent")
+                console.print(text)
             except Exception:
                 pass  # Don't break on gesture failure
 
@@ -255,7 +262,12 @@ def run_interactive_loop(
             messages = convo[-20:]  # bounded context
 
             # Call inference endpoint
-            console.print("[blue][inference][/blue] Request dispatched")
+            text = Text()
+            text.append("[", style="blue")
+            text.append("inference", style="blue bold")
+            text.append("]", style="blue")
+            text.append(" Request dispatched")
+            console.print(text)
             t1 = time.perf_counter()
             ok = False
             text = ""
@@ -295,15 +307,22 @@ def run_interactive_loop(
                 LLM_CALL_MS.observe(aim_ms)
                 AIM_CALL_MS.observe(aim_ms)  # Backward compatibility
                 
-                # Show latency with color coding
-                latency_seconds = aim_ms / 1000.0
+                # Show latency in milliseconds with color coding (green/yellow/red by threshold)
                 if aim_ms < 800:
                     latency_color = "green"
                 elif aim_ms < 2500:
                     latency_color = "yellow"
                 else:
                     latency_color = "red"
-                console.print(f"[blue][inference][/blue] Response received ([{latency_color}]{latency_seconds:.2f}s[/{latency_color}])")
+                
+                latency_display = Text()
+                latency_display.append("[", style="blue")
+                latency_display.append("inference", style="blue bold")
+                latency_display.append("]", style="blue")
+                latency_display.append(" Response received (")
+                latency_display.append(f"{int(aim_ms)} ms", style=latency_color)
+                latency_display.append(")")
+                console.print(latency_display)
                 
                 text = resp.text.strip()
                 original_text = text
@@ -467,10 +486,18 @@ def run_interactive_loop(
                 # Note: We don't turn body on error since we never turned it in the first place
                 # (We only turn body if we detect thinking tokens in the response)
                 
-                text = "Sorry, my inference backend is unavailable."
-                # Show error with latency
-                latency_seconds = aim_ms / 1000.0
-                console.print(f"[blue][inference][/blue] Request failed ([red]{latency_seconds:.2f}s[/red])")
+                error_message = "Sorry, my inference backend is unavailable."
+                # Show error with latency (red for errors)
+                error_display = Text()
+                error_display.append("[", style="blue")
+                error_display.append("inference", style="blue bold")
+                error_display.append("]", style="blue")
+                error_display.append(" Request failed (")
+                error_display.append(f"{int(aim_ms)} ms", style="red")
+                error_display.append(")")
+                console.print(error_display)
+                # Set text to the error message for TTS
+                text = error_message
 
             # Calculate end-to-end latency
             e2e_ms = (time.perf_counter() - t0) * 1000.0
@@ -485,17 +512,27 @@ def run_interactive_loop(
             except Exception:
                 pass  # Don't break on gesture failure
             
-            console.print("[green][edge][/green] Completion gesture sent")
-            console.print()  # Blank line for readability
+            # Use a different variable name to avoid overwriting the response text
+            completion_text = Text()
+            completion_text.append("[", style="green")
+            completion_text.append("edge", style="green bold")
+            completion_text.append("]", style="green")
+            completion_text.append(" Completion gesture sent")
+            console.print(completion_text)
+            print()  # Blank line for readability
 
             # Speak the response (or error message)
             # Note: speak() is blocking and already waits for TTS to complete
             # No need to wait again after it returns
             try:
-                robot.speak(text)
-                # speak() returns after TTS is complete, so we can reset immediately
-            except Exception:
-                pass  # Don't break on TTS failure
+                if text and text.strip():
+                    robot.speak(text)
+                    # speak() returns after TTS is complete, so we can reset immediately
+                else:
+                    logger.warning("TTS: Empty text, skipping speech")
+            except Exception as e:
+                logger.error(f"TTS failed: {e}", exc_info=True)
+                # Don't break on TTS failure, but log it
 
             # Reset robot to neutral position immediately after TTS completes
             # speak() already waited for TTS, so no additional wait needed

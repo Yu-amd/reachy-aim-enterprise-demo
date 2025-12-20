@@ -1255,7 +1255,13 @@ class ReachyDaemonREST(RobotAdapter):
             elif self._tts_method == "system":
                 actual_duration = self._speak_via_system(text)
             else:
-                logger.warning(f"🔊 TTS unavailable: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+                # Fallback: try espeak directly if no method is available
+                logger.warning(f"🔊 TTS method unavailable, trying espeak fallback: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+                try:
+                    actual_duration = self._speak_via_espeak(text)
+                except Exception as e:
+                    logger.error(f"⚠ TTS fallback also failed: {e}")
+                    actual_duration = estimated_duration
             
             # Stop motion loop before returning
             self._talk_motion_active = False
