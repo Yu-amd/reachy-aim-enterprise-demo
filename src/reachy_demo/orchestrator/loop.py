@@ -419,7 +419,9 @@ def run_interactive_loop(
                 else:
                     backend_name = "AIM (prod)"
                 print(f"> Backend: {backend_name}")
-                print(f"> Latency: {int(aim_ms)}ms")
+                # Show latency in seconds with 2 decimal places for enterprise feel
+                latency_seconds = aim_ms / 1000.0
+                print(f"> {backend_name} latency: {latency_seconds:.2f}s")
                 print(f"> Gesture: ACK → ERROR")
                 print()  # Blank line for readability
 
@@ -466,7 +468,9 @@ def run_interactive_loop(
             
             # Enterprise-ready output format
             print(f"> Backend: {backend_name}")
-            print(f"> Latency: {int(e2e_ms)}ms")
+            # Show latency in seconds with 2 decimal places for enterprise feel
+            latency_seconds = e2e_ms / 1000.0
+            print(f"> {backend_name} latency: {latency_seconds:.2f}s")
             print(f"> Gesture: ACK → {gesture_display}")
             print()  # Blank line for readability
 
