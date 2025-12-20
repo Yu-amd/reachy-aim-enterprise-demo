@@ -41,7 +41,7 @@ def run(
         s = Settings(**{**s.__dict__, "aim_model": model})
 
     start_metrics_server(s.metrics_host, s.metrics_port)
-    console.print(f"[green]Edge metrics:[/green] http://{s.metrics_host}:{s.metrics_port}/metrics")
+    # Suppress metrics URL output for clean enterprise display
 
     aim = AIMClient(
         base_url=s.aim_base_url,

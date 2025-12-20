@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import os
 import time
 import re
 import logging
 from typing import List, Dict
 
 from rich.console import Console
-from rich.panel import Panel
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +63,12 @@ def _handle_direct_command(cmd_text: str, robot: RobotAdapter, console: Console)
             
             gesture_name = args.strip()
             console.print(f"[cyan]Executing gesture:[/cyan] {gesture_name}")
-            robot.gesture(gesture_name)
-            console.print(f"[green]✓ Gesture '{gesture_name}' executed[/green]")
+            try:
+                robot.gesture(gesture_name)
+                console.print(f"[green]✓ Gesture '{gesture_name}' executed[/green]")
+            except Exception as e:
+                console.print(f"[red]✗ Gesture '{gesture_name}' failed:[/red] {e}")
+                logger.debug(f"Gesture error details: {e}", exc_info=True)
             
         elif command == "reset":
             console.print("[cyan]Resetting robot to home position...[/cyan]")
@@ -169,25 +173,45 @@ def run_interactive_loop(
     convo: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
     policy = LatencyPolicy()
     is_thinking_model = False  # Track if model is a thinking model (False = assume non-thinking until detected)
+    robot_is_asleep = False  # Track if robot is in sleep state
 
-    console.print(Panel.fit(
-        "Reachy Enterprise Demo (Enterprise-Responsive)\n"
-        "Type a prompt and press Enter. Ctrl+C to quit.\n"
-        "[dim]Use 'cmd:help' for direct robot control commands[/dim]",
-        title="Ready"
-    ))
-
-    if not robot.health():
-        console.print("[yellow]Warning:[/yellow] Reachy daemon not reachable at configured URL. Continuing without robot control.")
+    # Suppress warnings - enterprise-ready output only
+    logging.getLogger().setLevel(logging.ERROR)
+    
+    # Clear terminal for clean start
+    os.system('clear' if os.name != 'nt' else 'cls')
+    
+    # Minimal startup message
+    print("Enterprise Demo Ready")
+    print("=" * 50)
 
     while True:
         try:
-            user_text = console.input("\n[bold cyan]You> [/bold cyan]").strip()
+            # Clear terminal before each interaction for clean output
+            os.system('clear' if os.name != 'nt' else 'cls')
+            
+            user_text = input("> Prompt: ").strip()
             if not user_text:
                 continue
             
+            # Auto-wake robot if it's asleep (before processing any command or prompt)
+            if robot_is_asleep:
+                try:
+                    robot.gesture("wake_up")
+                    robot_is_asleep = False
+                    time.sleep(0.5)  # Give wake animation time to start
+                except Exception:
+                    pass  # Don't break if wake fails
+            
             # Check for direct command (bypasses LLM)
             if user_text.lower().startswith("cmd:"):
+                cmd_lower = user_text.lower()
+                # Track sleep state
+                if "goto_sleep" in cmd_lower or "sleep" in cmd_lower:
+                    robot_is_asleep = True
+                elif "wake_up" in cmd_lower or "wake" in cmd_lower:
+                    robot_is_asleep = False
+                
                 _handle_direct_command(user_text, robot, console)
                 continue
 
@@ -384,7 +408,20 @@ def run_interactive_loop(
                 # (We only turn body if we detect thinking tokens in the response)
                 
                 text = "Sorry, my inference backend is unavailable."
-                console.print(f"[red]Inference error:[/red] {inference_error}")
+                # Error output in enterprise format - use same detection logic
+                base_url_lower = aim.base_url.lower()
+                if ':1234' in base_url_lower or 'lmstudio' in base_url_lower:
+                    backend_name = "LMStudio"
+                elif 'localhost' in base_url_lower or '127.0.0.1' in base_url_lower:
+                    backend_name = "AIM (local)"
+                elif 'prod' in base_url_lower or 'production' in base_url_lower:
+                    backend_name = "AIM (prod)"
+                else:
+                    backend_name = "AIM (prod)"
+                print(f"> Backend: {backend_name}")
+                print(f"> Latency: {int(aim_ms)}ms")
+                print(f"> Gesture: ACK → ERROR")
+                print()  # Blank line for readability
 
             # Calculate end-to-end latency
             e2e_ms = (time.perf_counter() - t0) * 1000.0
@@ -394,38 +431,60 @@ def run_interactive_loop(
 
             # Note: Post-gesture removed - only ack gesture and reset are used
             # Metrics still tracked for monitoring
+            post_gesture = "ack"  # Default
             try:
                 post_gesture = policy.choose_post_gesture(aim_ms, e2e_ms, ok)
                 GESTURE_SELECTED.labels(gesture=post_gesture).inc()  # Track for metrics only
             except Exception:
                 pass  # Don't break on metrics failure
 
+            # Map gesture names to enterprise display format
+            gesture_display_map = {
+                "ack": "ACK",
+                "nod_fast": "COMPLETE",
+                "nod_tilt": "COMPLETE",
+                "thinking_done": "COMPLETE",
+                "error": "ERROR"
+            }
+            gesture_display = gesture_display_map.get(post_gesture, "COMPLETE")
+            
+            # Detect backend type from URL and model
+            base_url_lower = aim.base_url.lower()
+            
+            # Check for LMStudio (typically runs on port 1234)
+            if ':1234' in base_url_lower or 'lmstudio' in base_url_lower:
+                backend_name = "LMStudio"
+            # Check for local AIM endpoints (localhost/127.0.0.1 on common ports)
+            elif 'localhost' in base_url_lower or '127.0.0.1' in base_url_lower:
+                backend_name = "AIM (local)"
+            # Check for remote endpoints - check if it looks like production
+            elif 'prod' in base_url_lower or 'production' in base_url_lower:
+                backend_name = "AIM (prod)"
+            # Default to prod for remote endpoints
+            else:
+                backend_name = "AIM (prod)"
+            
+            # Enterprise-ready output format
+            print(f"> Backend: {backend_name}")
+            print(f"> Latency: {int(e2e_ms)}ms")
+            print(f"> Gesture: ACK → {gesture_display}")
+            print()  # Blank line for readability
+
             # Speak the response (or error message)
-            # Log the final text being spoken to debug duplicate audio issues
-            # Debug: Final text to speak (removed for cleaner output)
-            speech_duration = 0.0
+            # Note: speak() is blocking and already waits for TTS to complete
+            # No need to wait again after it returns
             try:
-                speech_duration = robot.speak(text)
+                robot.speak(text)
+                # speak() returns after TTS is complete, so we can reset immediately
             except Exception:
                 pass  # Don't break on TTS failure
 
-            # Reset robot to neutral position after response
-            # Wait for speech to complete, plus a small buffer for gesture completion
-            if speech_duration > 0:
-                time.sleep(speech_duration + 0.2)
-            else:
-                time.sleep(0.5)  # Fallback delay if duration unknown
+            # Reset robot to neutral position immediately after TTS completes
+            # speak() already waited for TTS, so no additional wait needed
             try:
                 robot.reset()
             except Exception:
                 pass  # Don't break on reset failure
-
-            # Display response with metrics
-            console.print(Panel(
-                text,
-                title=f"AIM ({model})",
-                subtitle=f"aim_call={aim_ms:.0f}ms  e2e={e2e_ms:.0f}ms  slo={e2e_slo_ms}ms  tier={policy.get_latency_tier(e2e_ms)}"
-            ))
         except KeyboardInterrupt:
             console.print("\n[bold]Bye.[/bold]")
             return

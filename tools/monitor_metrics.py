@@ -114,8 +114,9 @@ def create_dashboard(metrics: dict) -> Layout:
     e2e_sum = get_metric_value(metrics, "edge_e2e_ms_sum")
     e2e_count = get_metric_value(metrics, "edge_e2e_ms_count")
     
-    llm_avg = (llm_sum / llm_count * 1000) if llm_count > 0 else 0
-    e2e_avg = (e2e_sum / e2e_count * 1000) if e2e_count > 0 else 0
+    # Note: Prometheus histogram _sum is already in milliseconds, no need to multiply by 1000
+    llm_avg = (llm_sum / llm_count) if llm_count > 0 else 0
+    e2e_avg = (e2e_sum / e2e_count) if e2e_count > 0 else 0
     
     llm_p50 = calculate_percentile(metrics, "llm_call_ms", 50)
     llm_p95 = calculate_percentile(metrics, "llm_call_ms", 95)

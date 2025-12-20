@@ -295,9 +295,30 @@ class ReachyDaemonREST(RobotAdapter):
                 gestures = ["nod", "excited", "thinking", "greeting", "happy", "listening", "agreeing", "curious", "surprised", "emphatic"]
                 self.gesture(random.choice(gestures))
             elif name == "wake_up":
-                self._post("/api/move/play/wake_up")
+                try:
+                    logger.debug("🤖 Executing wake_up gesture...")
+                    response = self._post("/api/move/play/wake_up")
+                    response.raise_for_status()  # Raise exception if HTTP error
+                    logger.debug("🤖 Wake up gesture API call successful")
+                    # Give wake animation time to complete (wake_up animation is typically 2-3 seconds)
+                    # The daemon returns immediately with a UUID, but the animation takes time
+                    time.sleep(3.0)  # Wait for full wake animation to complete
+                    logger.debug("🤖 Wake animation should be complete")
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"🤖 Failed to execute wake_up gesture: {e}")
+                    if hasattr(e, 'response') and e.response is not None:
+                        logger.error(f"Response status: {e.response.status_code}, body: {e.response.text[:200]}")
+                    raise
             elif name == "goto_sleep":
-                self._post("/api/move/play/goto_sleep")
+                try:
+                    response = self._post("/api/move/play/goto_sleep")
+                    response.raise_for_status()  # Raise exception if HTTP error
+                    logger.debug("🤖 Sleep gesture executed successfully")
+                    # Give sleep animation time to complete
+                    time.sleep(1.0)
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"🤖 Failed to execute goto_sleep gesture: {e}")
+                    raise
             elif name.startswith("recorded:"):
                 # Support for recorded moves: "recorded:dataset_name:move_name"
                 # Example: "recorded:default:jackson_square"
