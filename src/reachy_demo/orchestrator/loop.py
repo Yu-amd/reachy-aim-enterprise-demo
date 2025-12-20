@@ -4,6 +4,7 @@ import os
 import time
 import re
 import logging
+import threading
 from typing import List, Dict
 
 from rich.console import Console
@@ -259,6 +260,31 @@ def run_interactive_loop(
             ok = False
             text = ""
             aim_ms = 0.0
+            thinking_gesture_started = False
+            
+            # Start thinking gesture in background if we expect latency > 700ms
+            # (We'll check actual latency during the call and start it if needed)
+            thinking_thread = None
+            
+            def start_thinking_if_needed():
+                """Start thinking gesture if latency exceeds 700ms."""
+                nonlocal thinking_gesture_started
+                check_interval = 0.1  # Check every 100ms
+                elapsed = 0.0
+                while elapsed < 5.0:  # Max 5 seconds
+                    time.sleep(check_interval)
+                    elapsed = (time.perf_counter() - t1) * 1000.0
+                    if elapsed > 700.0 and not thinking_gesture_started:
+                        try:
+                            robot.gesture("thinking")
+                            thinking_gesture_started = True
+                        except Exception:
+                            pass
+                        break
+            
+            # Start monitoring thread
+            thinking_thread = threading.Thread(target=start_thinking_if_needed, daemon=True)
+            thinking_thread.start()
             
             try:
                 resp = aim.chat(model=model, messages=messages, temperature=0.2, max_tokens=max_tokens, stream=False)
@@ -452,16 +478,13 @@ def run_interactive_loop(
             if e2e_ms > e2e_slo_ms:
                 SLO_MISS.inc()
 
-            # Note: Post-gesture removed - only ack gesture and reset are used
-            # Metrics still tracked for monitoring
-            post_gesture = "ack"  # Default
+            # Show completion gesture (enterprise: return to neutral, one small nod)
             try:
-                post_gesture = policy.choose_post_gesture(aim_ms, e2e_ms, ok)
-                GESTURE_SELECTED.labels(gesture=post_gesture).inc()  # Track for metrics only
+                robot.gesture("complete")
+                GESTURE_SELECTED.labels(gesture="complete").inc()
             except Exception:
-                pass  # Don't break on metrics failure
-
-            # Show completion gesture
+                pass  # Don't break on gesture failure
+            
             console.print("[green][edge][/green] Completion gesture sent")
             console.print()  # Blank line for readability
 

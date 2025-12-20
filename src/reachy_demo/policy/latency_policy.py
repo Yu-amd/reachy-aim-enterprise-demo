@@ -77,19 +77,9 @@ class LatencyPolicy:
             logger.info(f"⚠ Error detected - selecting error gesture (e2e={e2e_ms:.0f}ms)")
             return "error"
         
-        # Success case: select based on latency tier
-        if e2e_ms < self.TIER_0_THRESHOLD:
-            # Tier 0: Fast response (<800ms)
-            logger.info(f"✓ Tier 0 (fast): e2e={e2e_ms:.0f}ms, aim={aim_ms:.0f}ms → nod_fast")
-            return "nod_fast"
-        elif e2e_ms < self.TIER_1_THRESHOLD:
-            # Tier 1: Normal response (800-2500ms)
-            logger.info(f"✓ Tier 1 (normal): e2e={e2e_ms:.0f}ms, aim={aim_ms:.0f}ms → nod_tilt")
-            return "nod_tilt"
-        else:
-            # Tier 2: Slow response (>2500ms, SLO miss)
-            logger.info(f"⚠ Tier 2 (slow): e2e={e2e_ms:.0f}ms, aim={aim_ms:.0f}ms → thinking_done")
-            return "thinking_done"
+        # Success case: always use "complete" gesture (enterprise: return to neutral, one small nod)
+        logger.info(f"✓ Response complete: e2e={e2e_ms:.0f}ms, aim={aim_ms:.0f}ms → complete")
+        return "complete"
     
     def get_latency_tier(self, e2e_ms: float) -> int:
         """
