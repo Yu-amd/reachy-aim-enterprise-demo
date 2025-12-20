@@ -190,7 +190,12 @@ def run_interactive_loop(
             # Clear terminal before each interaction for clean output
             os.system('clear' if os.name != 'nt' else 'cls')
             
-            user_text = input("> Prompt: ").strip()
+            # Enterprise header
+            console.print("[cyan]reachy-aim-demo[/cyan]")
+            console.print("[cyan]----------------[/cyan]")
+            console.print()
+            
+            user_text = input("Prompt: ").strip()
             if not user_text:
                 continue
             
@@ -219,11 +224,29 @@ def run_interactive_loop(
             t0 = time.perf_counter()
             REQUESTS.inc()
 
+            # Detect backend type for display
+            base_url_lower = aim.base_url.lower()
+            if ':1234' in base_url_lower or 'lmstudio' in base_url_lower:
+                backend_name = "LMStudio"
+            elif 'localhost' in base_url_lower or '127.0.0.1' in base_url_lower:
+                backend_name = "AIM (local)"
+            elif 'prod' in base_url_lower or 'production' in base_url_lower:
+                backend_name = "AIM (prod)"
+            else:
+                backend_name = "AIM (OpenAI-compatible)"
+            
+            # Show prompt and backend info
+            console.print(f"[cyan]Prompt:[/cyan] {user_text}")
+            console.print(f"[cyan]Backend:[/cyan] {backend_name}")
+            console.print(f"[cyan]Target SLO:[/cyan] < {e2e_slo_ms/1000.0:.1f}s")
+            console.print()
+            
             # Immediate feedback: show acknowledgment gesture
             try:
                 pre_gesture = policy.choose_pre_gesture()
                 robot.gesture(pre_gesture)
                 GESTURE_SELECTED.labels(gesture=pre_gesture).inc()
+                console.print("[green][edge][/green] ACK gesture sent")
             except Exception:
                 pass  # Don't break on gesture failure
 
@@ -231,6 +254,7 @@ def run_interactive_loop(
             messages = convo[-20:]  # bounded context
 
             # Call inference endpoint
+            console.print("[blue][inference][/blue] Request dispatched")
             t1 = time.perf_counter()
             ok = False
             text = ""
@@ -244,6 +268,16 @@ def run_interactive_loop(
                 # Record LLM call latency (enterprise metrics)
                 LLM_CALL_MS.observe(aim_ms)
                 AIM_CALL_MS.observe(aim_ms)  # Backward compatibility
+                
+                # Show latency with color coding
+                latency_seconds = aim_ms / 1000.0
+                if aim_ms < 800:
+                    latency_color = "green"
+                elif aim_ms < 2500:
+                    latency_color = "yellow"
+                else:
+                    latency_color = "red"
+                console.print(f"[blue][inference][/blue] Response received ([{latency_color}]{latency_seconds:.2f}s[/{latency_color}])")
                 
                 text = resp.text.strip()
                 original_text = text
@@ -408,22 +442,9 @@ def run_interactive_loop(
                 # (We only turn body if we detect thinking tokens in the response)
                 
                 text = "Sorry, my inference backend is unavailable."
-                # Error output in enterprise format - use same detection logic
-                base_url_lower = aim.base_url.lower()
-                if ':1234' in base_url_lower or 'lmstudio' in base_url_lower:
-                    backend_name = "LMStudio"
-                elif 'localhost' in base_url_lower or '127.0.0.1' in base_url_lower:
-                    backend_name = "AIM (local)"
-                elif 'prod' in base_url_lower or 'production' in base_url_lower:
-                    backend_name = "AIM (prod)"
-                else:
-                    backend_name = "AIM (prod)"
-                print(f"> Backend: {backend_name}")
-                # Show latency in seconds with 2 decimal places for enterprise feel
+                # Show error with latency
                 latency_seconds = aim_ms / 1000.0
-                print(f"> {backend_name} latency: {latency_seconds:.2f}s")
-                print(f"> Gesture: ACK → ERROR")
-                print()  # Blank line for readability
+                console.print(f"[blue][inference][/blue] Request failed ([red]{latency_seconds:.2f}s[/red])")
 
             # Calculate end-to-end latency
             e2e_ms = (time.perf_counter() - t0) * 1000.0
@@ -440,39 +461,9 @@ def run_interactive_loop(
             except Exception:
                 pass  # Don't break on metrics failure
 
-            # Map gesture names to enterprise display format
-            gesture_display_map = {
-                "ack": "ACK",
-                "nod_fast": "COMPLETE",
-                "nod_tilt": "COMPLETE",
-                "thinking_done": "COMPLETE",
-                "error": "ERROR"
-            }
-            gesture_display = gesture_display_map.get(post_gesture, "COMPLETE")
-            
-            # Detect backend type from URL and model
-            base_url_lower = aim.base_url.lower()
-            
-            # Check for LMStudio (typically runs on port 1234)
-            if ':1234' in base_url_lower or 'lmstudio' in base_url_lower:
-                backend_name = "LMStudio"
-            # Check for local AIM endpoints (localhost/127.0.0.1 on common ports)
-            elif 'localhost' in base_url_lower or '127.0.0.1' in base_url_lower:
-                backend_name = "AIM (local)"
-            # Check for remote endpoints - check if it looks like production
-            elif 'prod' in base_url_lower or 'production' in base_url_lower:
-                backend_name = "AIM (prod)"
-            # Default to prod for remote endpoints
-            else:
-                backend_name = "AIM (prod)"
-            
-            # Enterprise-ready output format
-            print(f"> Backend: {backend_name}")
-            # Show latency in seconds with 2 decimal places for enterprise feel
-            latency_seconds = e2e_ms / 1000.0
-            print(f"> {backend_name} latency: {latency_seconds:.2f}s")
-            print(f"> Gesture: ACK → {gesture_display}")
-            print()  # Blank line for readability
+            # Show completion gesture
+            console.print("[green][edge][/green] Completion gesture sent")
+            console.print()  # Blank line for readability
 
             # Speak the response (or error message)
             # Note: speak() is blocking and already waits for TTS to complete
