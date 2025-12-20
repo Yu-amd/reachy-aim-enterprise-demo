@@ -189,13 +189,12 @@ def run_interactive_loop(
 
     while True:
         try:
-            # Clear terminal before each interaction for clean output
-            os.system('clear' if os.name != 'nt' else 'cls')
-            
-            # Enterprise header (plain text, no color)
-            print("reachy-aim-demo")
-            print("----------------")
-            print()
+            # Enterprise header (plain text, no color) - only show once at start
+            if not hasattr(run_interactive_loop, '_header_shown'):
+                print("reachy-aim-demo")
+                print("----------------")
+                print()
+                run_interactive_loop._header_shown = True
             
             # Get user input with prompt label (cyan)
             console.print("[cyan]Prompt:[/cyan] ", end="")
