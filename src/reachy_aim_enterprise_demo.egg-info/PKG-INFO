@@ -13,6 +13,9 @@ Requires-Dist: rich>=13.7.1
 Requires-Dist: pydantic>=2.7.0
 Requires-Dist: prometheus-client>=0.20.0
 Requires-Dist: pyttsx3>=2.90
+Provides-Extra: tts-piper
+Requires-Dist: piper-tts>=1.0.0; extra == "tts-piper"
+Requires-Dist: pyaudio>=0.2.11; extra == "tts-piper"
 Dynamic: license-file
 
 # Reachy Mini Lite + AMD Inference Microservice (AIM) Enterprise Demo
@@ -83,14 +86,35 @@ AIM_BASE_URL=http://localhost:1234
 
 # For Mode B (AIM remote via SSH port forward):
 AIM_BASE_URL=http://127.0.0.1:8000
+
+# For Mode B (AIM remote - direct URL, if accessible):
+# AIM_BASE_URL=http://your-cluster-host:8000
+# Or with API key if required:
+# AIM_BASE_URL=http://your-cluster-host:8000
+# AIM_API_KEY=your-api-key-here
 ```
+
+**Note:** If you're connecting to a remote AIM endpoint:
+- If using SSH port forward: `ssh -L 8000:localhost:8000 user@cluster-host` then use `AIM_BASE_URL=http://127.0.0.1:8000`
+- If the endpoint is directly accessible: Use the full URL like `AIM_BASE_URL=http://cluster-host:8000`
+- If authentication is required: Set `AIM_API_KEY` in your `.env` file
+- If connection fails: Check the error message in the terminal - it will show the specific connection issue
 
 **3. Start the demo (two terminals):**
 
 **Terminal 1 - Start Reachy daemon:**
 ```bash
-# For hardware robot:
+# Activate virtual environment
+source .venv/bin/activate
+
+# For hardware robot (after plugging in):
+# Set permissions for the serial port
+sudo chmod 666 /dev/ttyACM0
+
+# Start daemon
 reachy-mini-daemon -p /dev/ttyACM0 --fastapi-port 8001
+
+# Daemon will be accessible at: http://127.0.0.1:8001/
 
 # OR for simulation:
 make sim
@@ -107,6 +131,18 @@ That's it! The demo will:
 - Display metrics at `http://127.0.0.1:9100/metrics`
 
 **Note:** The `.env.example` is pre-configured with `REACHY_DAEMON_URL=http://127.0.0.1:8001` to match the daemon port.
+
+### Direct Robot Commands
+
+You can control the robot directly without going through the LLM by using the `cmd:` prefix:
+
+- `cmd:gesture <name>` - Execute a gesture directly (e.g., `cmd:gesture nod`)
+- `cmd:reset` - Reset robot to home position
+- `cmd:calibrate` - Calibrate current position as home
+- `cmd:state` - Show current robot state
+- `cmd:help` - Show all available commands
+
+See [docs/direct-commands.md](docs/direct-commands.md) for full documentation.
 
 ## Demo Narrative
 
@@ -361,26 +397,94 @@ Text-to-Speech:
 - TTS method is auto-detected: tries daemon API first (`/api/speak`, `/api/tts`, etc.), falls back to system TTS (pyttsx3)
 - In sim mode: Typically uses system TTS (pyttsx3) which plays through your computer's speakers
 - In hardware mode: Will use daemon API if available (robot's speakers), otherwise falls back to system TTS
+- **Audio Device Routing**: The TTS system can automatically detect and route audio to the Reachy Mini's built-in speaker
+  - Auto-detection: Looks for USB audio devices (common for Reachy Mini)
+  - Manual configuration: Set `AUDIO_DEVICE` in `.env` (e.g., `AUDIO_DEVICE=hw:1,0`)
+  - To find your audio device: Run `aplay -l` and look for USB/Reachy devices
+  - **📖 Full setup guide**: See [docs/audio-setup.md](docs/audio-setup.md) for step-by-step instructions
 - System TTS works offline and cross-platform (Windows, Linux, macOS)
 - You'll see a startup message indicating which TTS method is being used (e.g., `✓ TTS: Using system TTS (pyttsx3)`)
+- If audio device is detected: `✓ Detected Reachy Mini audio device: hw:1,0`
 
-### Step 6: (Optional) Check Prometheus metrics
+### Step 6: (Optional) Monitor Metrics and Observability
 
-While the demo is running, you can view metrics in another terminal:
+The demo exposes Prometheus metrics at `http://127.0.0.1:9100/metrics`. You can monitor these metrics in several ways:
+
+#### Option 1: Real-time Dashboard (Recommended)
+
+A rich terminal dashboard with live updates:
 
 ```bash
-# View metrics endpoint
-curl http://127.0.0.1:9100/metrics
+# In a new terminal (with venv activated)
+python tools/monitor_metrics.py
 ```
 
-Or open in browser: http://127.0.0.1:9100/metrics
+This shows:
+- **Request Statistics**: Total requests, errors, SLO misses, backend failures
+- **Latency Metrics**: Average, P50, P95, P99 for LLM calls and end-to-end latency
+- **Gesture Selection**: Distribution of gestures being used
+- **SLO Compliance**: Real-time SLO status
 
-Available metrics:
-- `edge_e2e_ms` - End-to-end latency histogram
-- `aim_call_ms` - AIM API call latency histogram
+The dashboard auto-refreshes every 0.5 seconds.
+
+#### Option 2: Query Metrics Tool
+
+Get a formatted snapshot of current metrics:
+
+```bash
+# In a new terminal (with venv activated)
+python tools/query_metrics.py
+```
+
+This displays:
+- Latency percentiles (P50, P95, P99)
+- Request statistics
+- Gesture distribution
+- SLO compliance status
+
+#### Option 3: Raw Prometheus Endpoint
+
+View raw metrics in your browser or via curl:
+
+```bash
+# View all metrics
+curl http://127.0.0.1:9100/metrics
+
+# Or open in browser
+# http://127.0.0.1:9100/metrics
+```
+
+#### Option 4: Simple Terminal Monitor
+
+Quick text-based monitoring:
+
+```bash
+# Watch key metrics (refreshes every 2 seconds)
+./tools/monitor_metrics.sh
+
+# Or with custom refresh interval
+./tools/monitor_metrics.sh 1
+```
+
+#### Available Metrics
+
+- `llm_call_ms` - LLM inference latency histogram (milliseconds)
+- `edge_e2e_ms` - End-to-end latency histogram (milliseconds)
 - `edge_requests_total` - Total request counter
 - `edge_errors_total` - Error counter
-- `edge_slo_miss_total` - SLO violation counter
+- `edge_slo_miss_total` - SLO violation counter (>2500ms)
+- `backend_failures_total` - Backend/inference failure counter
+- `gesture_selected_total{gesture="..."}` - Gesture selection counter
+
+#### Example Metrics Output
+
+After running some queries, you can see:
+- **Average latency**: How fast responses are
+- **Percentiles**: P50 (median), P95 (95th percentile), P99 (99th percentile)
+- **SLO compliance**: Percentage of requests meeting the 2500ms target
+- **Gesture distribution**: Which gestures are being used most
+
+For more details, see [docs/enterprise-latency-behavior.md](docs/enterprise-latency-behavior.md).
 
 ### Step 7: (Optional) Test local load generator
 
@@ -736,14 +840,30 @@ Fully Implemented:
 | `E2E_SLO_MS` | No | `2500` | End-to-end SLO in milliseconds |
 | `EDGE_METRICS_HOST` | No | `127.0.0.1` | Metrics server host |
 | `EDGE_METRICS_PORT` | No | `9100` | Metrics server port |
+| `AUDIO_DEVICE` | No | `None` (auto-detect) | ALSA audio device for robot speaker (e.g., `hw:1,0`). If not set, will auto-detect USB audio devices. Use `aplay -l` to list available devices. |
 
 ## Connect to a Physical Robot
 
-1. Connect to physical robot:
+1. After plugging in the robot, start the daemon:
    ```bash
-   # Run daemon with serial port instead of simulation
-   reachy-mini-daemon -p /dev/ttyUSB0  # or your serial port
+   # Activate virtual environment
+   source .venv/bin/activate
+   
+   # Set permissions for the serial port (required each time after plugging in)
+   sudo chmod 666 /dev/ttyACM0
+   
+   # Start daemon with the robot's serial port
+   reachy-mini-daemon -p /dev/ttyACM0 --fastapi-port 8001
+   
+   # Daemon will be accessible at: http://127.0.0.1:8001/
    ```
+   
+   **Note:** The permission step (`sudo chmod 666 /dev/ttyACM0`) is required each time after plugging in the robot. Alternatively, you can add your user to the `dialout` group to avoid needing `sudo`:
+   ```bash
+   sudo usermod -a -G dialout $USER
+   # Then log out and back in, or run: newgrp dialout
+   ```
+   
    The existing gesture implementation will work with the physical robot - no code changes needed!
 
 2. Customize gestures (optional):
@@ -758,8 +878,12 @@ Fully Implemented:
 3. Customize speech (optional):
    - TTS is already implemented with daemon API + system TTS fallback
    - Robot automatically speaks AIM responses
+   - **Audio Device Routing**: To use the Reachy Mini's built-in speaker:
+     - Auto-detection: The system will automatically detect USB audio devices
+     - Manual configuration: Add `AUDIO_DEVICE=hw:1,0` to your `.env` file (find your device with `aplay -l`)
+     - The TTS will route audio to the robot's speaker instead of your laptop speakers
    - To customize: see `docs/tts-implementation.md` for advanced options (cloud TTS, async, etc.)
-   - Current implementation: daemon API (if available) → system TTS (pyttsx3) fallback
+   - Current implementation: daemon API (if available) → system TTS (pyttsx3) fallback → audio device routing
 
 ## Additional Notes
 

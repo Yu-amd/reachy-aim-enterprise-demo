@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import requests
 import time
 import random
@@ -209,18 +210,59 @@ class ReachyDaemonREST(RobotAdapter):
         # Try Piper TTS (best quality, natural voice)
         if PIPER_AVAILABLE:
             try:
-                # Try to load a default voice (en_US-lessac-medium)
-                voice_name = "en_US-lessac-medium"
-                try:
-                    ensure_voice_exists(voice_name, ["./voices", "~/.local/share/piper/voices"])
-                    voice_path = find_voice(voice_name, ["./voices", "~/.local/share/piper/voices"])
-                    if voice_path:
-                        self._piper_voice = PiperVoice.load(voice_path)
-                        self._tts_method = "piper"
-                        logger.info(f"✓ TTS: Using Piper (natural voice: {voice_name})")
-                        return
-                except Exception as e:
-                    logger.debug(f"Piper voice {voice_name} not found: {e}, trying espeak fallback")
+                # Try multiple voice options (in order of preference)
+                voice_options = [
+                    "en_US-lessac-medium",  # High quality, natural voice
+                    "en_US-lessac-low",     # Lower quality but smaller file
+                    "en_US-joe-medium",     # Alternative voice
+                ]
+                
+                for voice_name in voice_options:
+                    try:
+                        # Try to find voice in common locations
+                        voice_paths = [
+                            f"./voices/{voice_name}.onnx",
+                            f"~/.local/share/piper/voices/{voice_name}.onnx",
+                            f"/usr/share/piper/voices/{voice_name}.onnx",
+                        ]
+                        
+                        voice_path = None
+                        for path in voice_paths:
+                            expanded_path = os.path.expanduser(path)
+                            if os.path.exists(expanded_path):
+                                voice_path = expanded_path
+                                break
+                        
+                        # If not found, try downloading via piper-tts CLI (if available)
+                        if not voice_path:
+                            try:
+                                # Try to download voice using piper-tts CLI
+                                import subprocess
+                                result = subprocess.run(
+                                    ['piper-tts', '--download', voice_name],
+                                    capture_output=True,
+                                    timeout=60
+                                )
+                                if result.returncode == 0:
+                                    # Try to find the downloaded voice
+                                    for path in voice_paths:
+                                        expanded_path = os.path.expanduser(path)
+                                        if os.path.exists(expanded_path):
+                                            voice_path = expanded_path
+                                            break
+                            except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+                                pass
+                        
+                        if voice_path and os.path.exists(voice_path):
+                            self._piper_voice = PiperVoice.load(voice_path)
+                            self._tts_method = "piper"
+                            logger.info(f"✓ TTS: Using Piper (natural voice: {voice_name})")
+                            return
+                    except Exception as e:
+                        logger.debug(f"Piper voice {voice_name} not available: {e}, trying next option")
+                        continue
+                
+                logger.debug("No Piper voices found, falling back to espeak")
             except Exception as e:
                 logger.debug(f"Piper initialization failed: {e}, trying espeak fallback")
         
@@ -403,13 +445,18 @@ class ReachyDaemonREST(RobotAdapter):
                     raise
             elif name == "goto_sleep":
                 try:
+                    logger.debug("🤖 Executing goto_sleep gesture...")
                     response = self._post("/api/move/play/goto_sleep")
                     response.raise_for_status()  # Raise exception if HTTP error
-                    logger.debug("🤖 Sleep gesture executed successfully")
-                    # Give sleep animation time to complete
-                    time.sleep(1.0)
+                    logger.debug("🤖 Sleep gesture API call successful")
+                    # Give sleep animation time to complete (sleep animation is typically 2-3 seconds)
+                    # The daemon returns immediately with a UUID, but the animation takes time
+                    time.sleep(3.0)  # Wait for full sleep animation to complete
+                    logger.debug("🤖 Sleep animation should be complete")
                 except requests.exceptions.RequestException as e:
                     logger.error(f"🤖 Failed to execute goto_sleep gesture: {e}")
+                    if hasattr(e, 'response') and e.response is not None:
+                        logger.error(f"Response status: {e.response.status_code}, body: {e.response.text[:200]}")
                     raise
             elif name.startswith("recorded:"):
                 # Support for recorded moves: "recorded:dataset_name:move_name"
@@ -575,10 +622,10 @@ class ReachyDaemonREST(RobotAdapter):
                     head_pose={**current_pose, "pitch": current_pitch - 0.35, "yaw": current_yaw + (0.15 if i % 2 == 0 else -0.15)},
                     antennas=[-0.5, 0.5],
                     body_yaw=current_body_yaw + (0.15 if i % 2 == 0 else -0.15),
-                    duration=0.15
-                )
+                duration=0.15
+            )
                 time.sleep(0.1)  # Longer pause
-                
+            
                 # Head up with antennas spread - more pronounced
                 self._move_to_pose(
                     head_pose={**current_pose, "pitch": current_pitch + 0.35, "yaw": current_yaw + (-0.1 if i % 2 == 0 else 0.1)},
@@ -588,12 +635,12 @@ class ReachyDaemonREST(RobotAdapter):
                 time.sleep(0.1)  # Longer pause
             
             # Big final flourish: very big head bob with very wide antennas
-            self._move_to_pose(
+                self._move_to_pose(
                 head_pose={**current_pose, "pitch": current_pitch - 0.45, "yaw": current_yaw + 0.2},
                 antennas=[0.7, 0.7],
                 body_yaw=current_body_yaw + 0.18,
                 duration=0.2
-            )
+                )
             time.sleep(0.15)  # Hold longer
             
             # Bounce back up with antennas spread very wide
@@ -1074,8 +1121,8 @@ class ReachyDaemonREST(RobotAdapter):
                     "yaw": 0.0,
                     "roll": 0.0
                 },
-                duration=0.15
-            )
+                    duration=0.15
+                )
             time.sleep(0.05)
             
             # Return to neutral
@@ -1317,57 +1364,57 @@ class ReachyDaemonREST(RobotAdapter):
         with self._tts_lock:
             # Kill any existing TTS processes to prevent overlap
             self._kill_tts_processes()
-            
+        
             # Log the full text being spoken for debugging (only in debug mode)
             logger.debug(f"🔊 TTS: Speaking full text ({len(text)} chars): '{text}'")
-            
-            # Check TTS availability if not already checked
-            if not self._tts_checked:
-                self._check_tts_availability()
-            
-            # Estimate duration based on text length (rough: ~150 words per minute = 2.5 words/sec)
-            # Average word length ~5 chars, so ~12.5 chars/sec, or ~0.08 sec/char
-            estimated_duration = max(0.5, len(text) * 0.08)
-            
-            # Start speech-synced motion loop in parallel
-            motion_thread = None
-            if self.health():
-                motion_thread = threading.Thread(
-                    target=self._talk_motion_loop,
-                    args=(estimated_duration,),
-                    daemon=True
-                )
-                motion_thread.start()
-            
-            # Speak using available method
-            actual_duration = estimated_duration
-            if self._tts_method == "daemon":
-                actual_duration = self._speak_via_daemon(text)
-            elif self._tts_method == "piper":
-                actual_duration = self._speak_via_piper(text)
-            elif self._tts_method == "system":
-                actual_duration = self._speak_via_system(text)
-            else:
-                # Fallback: try espeak directly if no method is available
-                logger.warning(f"🔊 TTS method unavailable, trying espeak fallback: '{text[:50]}{'...' if len(text) > 50 else ''}'")
-                try:
-                    actual_duration = self._speak_via_espeak(text)
-                except Exception as e:
-                    logger.error(f"⚠ TTS fallback also failed: {e}")
-                    actual_duration = estimated_duration
-            
-            # Stop motion loop before returning
-            self._talk_motion_active = False
-            
-            # Wait for motion thread to finish
-            if motion_thread and motion_thread.is_alive():
-                # Wait a bit for the motion loop to see the flag and stop
-                time.sleep(0.2)
-                # If still running, wait a bit more (motion loop checks flag every 0.1s)
-                if motion_thread.is_alive():
-                    time.sleep(0.3)
-            
-            return actual_duration
+        
+        # Check TTS availability if not already checked (only check once)
+        if not self._tts_checked:
+            self._check_tts_availability()
+        
+        # Estimate duration based on text length (rough: ~150 words per minute = 2.5 words/sec)
+        # Average word length ~5 chars, so ~12.5 chars/sec, or ~0.08 sec/char
+        estimated_duration = max(0.5, len(text) * 0.08)
+        
+        # Start speech-synced motion loop in parallel
+        motion_thread = None
+        if self.health():
+            motion_thread = threading.Thread(
+                target=self._talk_motion_loop,
+                args=(estimated_duration,),
+                daemon=True
+            )
+            motion_thread.start()
+        
+        # Speak using available method
+        actual_duration = estimated_duration
+        if self._tts_method == "daemon":
+            actual_duration = self._speak_via_daemon(text)
+        elif self._tts_method == "piper":
+            actual_duration = self._speak_via_piper(text)
+        elif self._tts_method == "system":
+            actual_duration = self._speak_via_system(text)
+        else:
+            # Fallback: try espeak directly if no method is available
+            logger.warning(f"🔊 TTS method unavailable, trying espeak fallback: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+            try:
+                actual_duration = self._speak_via_espeak(text)
+            except Exception as e:
+                logger.error(f"⚠ TTS fallback also failed: {e}")
+                actual_duration = estimated_duration
+        
+        # Stop motion loop before returning
+        self._talk_motion_active = False
+        
+        # Wait for motion thread to finish
+        if motion_thread and motion_thread.is_alive():
+            # Wait a bit for the motion loop to see the flag and stop
+            time.sleep(0.2)
+            # If still running, wait a bit more (motion loop checks flag every 0.1s)
+            if motion_thread.is_alive():
+                time.sleep(0.3)
+        
+        return actual_duration
     
     def _kill_tts_processes(self) -> None:
         """Kill any running TTS processes to prevent audio overlap."""
@@ -1519,16 +1566,57 @@ class ReachyDaemonREST(RobotAdapter):
             try:
                 if pyaudio is None:
                     raise ImportError("pyaudio not available")
-                p = pyaudio.PyAudio()
+                
+                # Suppress ALSA/PortAudio error messages (they're non-fatal but noisy)
+                # These errors come from PortAudio/ALSA C library and print directly to stderr
+                import os
+                import sys
+                from contextlib import redirect_stderr
+                from io import StringIO
+                
+                # Set environment variables to suppress ALSA warnings
+                old_env = {}
+                for key in ['ALSA_CARD', 'PULSE_RUNTIME_PATH']:
+                    if key in os.environ:
+                        old_env[key] = os.environ[key]
+                
+                # Redirect stderr to suppress ALSA/PortAudio errors
+                stderr_capture = StringIO()
+                old_stderr = sys.stderr
+                
+                try:
+                    # Suppress stderr during pyaudio initialization
+                    sys.stderr = stderr_capture
+                    p = pyaudio.PyAudio()
+                    sys.stderr = old_stderr  # Restore immediately after init
+                except Exception as pyaudio_init_error:
+                    sys.stderr = old_stderr  # Restore on error
+                    # pyaudio initialization failed (likely ALSA issues)
+                    logger.debug(f"pyaudio initialization failed: {pyaudio_init_error}, falling back to aplay")
+                    raise ImportError("pyaudio initialization failed")
+                
                 wf = wave.open(audio_stream, 'rb')
                 
-                # Open audio stream
-                stream = p.open(
-                    format=p.get_format_from_width(wf.getsampwidth()),
-                    channels=wf.getnchannels(),
-                    rate=wf.getframerate(),
-                    output=True
-                )
+                # Open audio stream - try to use detected audio device if available
+                # Note: pyaudio device selection is complex, so we'll use aplay fallback for device routing
+                # For now, use default device (pyaudio doesn't easily support PulseAudio device selection)
+                try:
+                    # Suppress stderr during stream opening (ALSA errors)
+                    sys.stderr = stderr_capture
+                    stream = p.open(
+                        format=p.get_format_from_width(wf.getsampwidth()),
+                        channels=wf.getnchannels(),
+                        rate=wf.getframerate(),
+                        output=True
+                    )
+                    sys.stderr = old_stderr  # Restore immediately after opening
+                except Exception as stream_error:
+                    sys.stderr = old_stderr  # Restore on error
+                    # Stream opening failed (ALSA errors)
+                    p.terminate()
+                    wf.close()
+                    logger.debug(f"pyaudio stream open failed: {stream_error}, falling back to aplay")
+                    raise ImportError("pyaudio stream open failed")
                 
                 # Play audio
                 start_time = time.time()
@@ -1546,18 +1634,98 @@ class ReachyDaemonREST(RobotAdapter):
                 duration = time.time() - start_time
                 logger.debug(f"✓ Piper TTS completed in {duration:.2f}s")
                 return duration
-            except ImportError:
-                # pyaudio not available, try aplay fallback
-                logger.debug("pyaudio not available, trying aplay fallback")
+            except (ImportError, OSError, Exception) as pyaudio_error:
+                # pyaudio not available, try aplay/paplay fallback with proper audio routing
+                logger.debug("pyaudio not available, using aplay/paplay with audio routing")
                 audio_stream.seek(0)
                 # Use detected audio device if available
                 audio_device = self._detect_audio_device()
-                aplay_cmd = ['aplay', '-q']
-                if audio_device:
-                    aplay_cmd.extend(['-D', audio_device])
-                    logger.info(f"🔊 Routing audio to device: {audio_device}")
+                
+                # Use the same audio routing logic as espeak
+                aplay_cmd = None
+                if audio_device and audio_device.startswith('pulse:'):
+                    # PulseAudio device - use paplay with sink name
+                    sink_id = audio_device.split(':', 1)[1]
+                    aplay_cmd = ['paplay', '--device', sink_id]
+                    logger.info(f"🔊 Routing Piper audio to PulseAudio sink: {sink_id}")
+                elif audio_device and audio_device.startswith('hw:'):
+                    # ALSA device - find PulseAudio card and create/use its sink (same logic as espeak)
+                    card_num = audio_device.split(':')[1].split(',')[0]
+                    card_name = None
+                    try:
+                        cards_result = subprocess.run(
+                            ['pactl', 'list', 'cards', 'short'],
+                            capture_output=True,
+                            text=True,
+                            timeout=1.0
+                        )
+                        if cards_result.returncode == 0:
+                            for line in cards_result.stdout.split('\n'):
+                                if line.strip() and (f'card{card_num}' in line.lower() or 'reachy' in line.lower()):
+                                    parts = line.split('\t')
+                                    if len(parts) >= 2:
+                                        card_name = parts[1]
+                                        break
+                    except Exception:
+                        pass
+                    
+                    if card_name:
+                        # Enable card profile
+                        try:
+                            subprocess.run(
+                                ['pactl', 'set-card-profile', card_name, 'output:analog-stereo'],
+                                capture_output=True,
+                                timeout=1.0
+                            )
+                            time.sleep(1.5)
+                        except Exception:
+                            pass
+                        
+                        # Find or create sink
+                        sink_found = None
+                        try:
+                            sinks_result = subprocess.run(
+                                ['pactl', 'list', 'sinks', 'short'],
+                                capture_output=True,
+                                text=True,
+                                timeout=1.0
+                            )
+                            if sinks_result.returncode == 0:
+                                for line in sinks_result.stdout.split('\n'):
+                                    if line.strip() and ('pollen' in line.lower() or 'reachy' in line.lower()):
+                                        parts = line.split('\t')
+                                        if len(parts) >= 2:
+                                            sink_found = parts[1]
+                                            break
+                        except Exception:
+                            pass
+                        
+                        if sink_found:
+                            # Set as default temporarily
+                            try:
+                                subprocess.run(
+                                    ['pactl', 'set-default-sink', sink_found],
+                                    capture_output=True,
+                                    timeout=0.5
+                                )
+                                aplay_cmd = ['paplay']
+                                logger.info(f"🔊 Routing Piper audio to PulseAudio sink: {sink_found}")
+                            except Exception:
+                                pass
+                    
+                    if not aplay_cmd:
+                        # Fallback to plughw
+                        plug_device = audio_device.replace('hw:', 'plughw:')
+                        aplay_cmd = ['aplay', '-q', '-D', plug_device]
+                        logger.info(f"🔊 Routing Piper audio via plughw: {plug_device}")
                 else:
-                    logger.info("🔊 Using system default audio device")
+                    # Default aplay command
+                    aplay_cmd = ['aplay', '-q']
+                    logger.debug("Using default aplay for Piper TTS")
+                
+                if not aplay_cmd:
+                    aplay_cmd = ['aplay', '-q']
+                
                 aplay_proc = subprocess.Popen(
                     aplay_cmd,
                     stdin=audio_stream,
@@ -1582,7 +1750,23 @@ class ReachyDaemonREST(RobotAdapter):
         try:
             logger.debug(f"🔊 Speaking via espeak: '{text[:50]}{'...' if len(text) > 50 else ''}'")
             
-            # Clean text
+            # Clean text and limit length to prevent timeouts
+            # Espeak can be slow with very long text, so limit to ~2000 chars (~300 words)
+            max_text_length = 2000
+            if len(text) > max_text_length:
+                # Truncate at last complete sentence
+                truncated = text[:max_text_length]
+                last_period = truncated.rfind('.')
+                last_exclamation = truncated.rfind('!')
+                last_question = truncated.rfind('?')
+                last_sentence_end = max(last_period, last_exclamation, last_question)
+                if last_sentence_end > max_text_length * 0.7:  # Only truncate if we found a sentence end in the last 30%
+                    text = truncated[:last_sentence_end + 1]
+                else:
+                    # No good sentence break, just truncate
+                    text = truncated
+                logger.warning(f"⚠ TTS text truncated from {len(text)} to {len(text)} chars to prevent timeout")
+            
             cleaned_text = re.sub(r'\s+', ' ', text.strip())
             
             start_time = time.time()
@@ -1782,8 +1966,10 @@ class ReachyDaemonREST(RobotAdapter):
                 # Track processes so we can kill them if needed
                 self._current_tts_processes = [espeak_proc, aplay_proc]
                 
-                espeak_proc.wait(timeout=30)
-                aplay_proc.wait(timeout=30)
+                # Increase timeout for longer text (30s base + 1s per 100 chars, max 120s)
+                timeout_seconds = min(120, 30 + len(cleaned_text) // 100)
+                espeak_proc.wait(timeout=timeout_seconds)
+                aplay_proc.wait(timeout=timeout_seconds)
                 
                 # Check for aplay errors
                 aplay_stderr = aplay_proc.stderr.read().decode('utf-8', errors='ignore') if aplay_proc.stderr else ''
@@ -1816,8 +2002,9 @@ class ReachyDaemonREST(RobotAdapter):
                                 stderr=subprocess.DEVNULL
                             )
                             espeak_proc_retry.stdout.close()
-                            espeak_proc_retry.wait(timeout=30)
-                            aplay_proc_retry.wait(timeout=30)
+                            timeout_seconds_retry = min(120, 30 + len(cleaned_text) // 100)
+                            espeak_proc_retry.wait(timeout=timeout_seconds_retry)
+                            aplay_proc_retry.wait(timeout=timeout_seconds_retry)
                             if espeak_proc_retry.returncode == 0 and aplay_proc_retry.returncode == 0:
                                 logger.warning(f"⚠ Audio played on system default device (robot device was busy)")
                                 return max(0.5, len(text) * 0.08)
@@ -1904,8 +2091,9 @@ class ReachyDaemonREST(RobotAdapter):
                     try:
                         import subprocess
                         cleaned_text = re.sub(r'\s+', ' ', input_text.strip())
+                        timeout_seconds_direct = min(120, 30 + len(cleaned_text) // 100)
                         subprocess.run(['espeak', '-s', '175', '-a', '150', cleaned_text],
-                                     timeout=30, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                     timeout=timeout_seconds_direct, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                         logger.debug(f"✓ TTS completed via espeak fallback")
                         return
                     except Exception:
@@ -2055,8 +2243,9 @@ class ReachyDaemonREST(RobotAdapter):
                         espeak_proc.stdout.close()
                         
                         # Wait for both processes
-                        espeak_proc.wait(timeout=30)
-                        aplay_proc.wait(timeout=30)
+                        timeout_seconds_fallback = min(120, 30 + len(speech_text) // 100)
+                        espeak_proc.wait(timeout=timeout_seconds_fallback)
+                        aplay_proc.wait(timeout=timeout_seconds_fallback)
                         
                         if espeak_proc.returncode == 0 and aplay_proc.returncode == 0:
                             logger.debug(f"✓ TTS playback completed via espeak+aplay for {len(cleaned_text)} character text")

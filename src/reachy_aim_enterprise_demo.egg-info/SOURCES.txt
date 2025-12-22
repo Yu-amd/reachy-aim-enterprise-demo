@@ -9,6 +9,7 @@ src/reachy_aim_enterprise_demo.egg-info/requires.txt
 src/reachy_aim_enterprise_demo.egg-info/top_level.txt
 src/reachy_demo/__init__.py
 src/reachy_demo/config.py
+src/reachy_demo/demo_suite.py
 src/reachy_demo/main.py
 src/reachy_demo/adapters/__init__.py
 src/reachy_demo/adapters/robot_base.py
@@ -18,6 +19,8 @@ src/reachy_demo/aim/__init__.py
 src/reachy_demo/aim/client.py
 src/reachy_demo/aim/errors.py
 src/reachy_demo/aim/models.py
+src/reachy_demo/gestures/__init__.py
+src/reachy_demo/gestures/motion.py
 src/reachy_demo/obs/__init__.py
 src/reachy_demo/obs/metrics.py
 src/reachy_demo/orchestrator/__init__.py
@@ -27,7 +30,12 @@ src/reachy_demo/orchestrator/prompts.py
 src/reachy_demo/policy/__init__.py
 src/reachy_demo/policy/latency_policy.py
 src/reachy_demo/tools/__init__.py
+src/reachy_demo/tools/calibrate_home.py
+src/reachy_demo/tools/discover_recorded_moves.py
 src/reachy_demo/tools/loadgen_local.py
 src/reachy_demo/tools/test_gesture_mapping.py
+src/reachy_demo/tools/test_latency_gestures.py
 src/reachy_demo/tools/test_tts.py
+src/reachy_demo/util/__init__.py
+src/reachy_demo/util/logger.py
 tests/test_config.py

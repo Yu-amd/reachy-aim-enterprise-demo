@@ -11,7 +11,7 @@ from .adapters.robot_rest import ReachyDaemonREST
 from .obs.metrics import start_metrics_server
 from .orchestrator.loop import run_interactive_loop
 
-# Configure logging - only show warnings and errors
+# Configure logging - only show warnings and errors by default
 logging.basicConfig(
     level=logging.WARNING,
     format='%(levelname)s: %(message)s'
@@ -25,13 +25,32 @@ def _make_robot(settings: Settings):
         return SimRobot(settings.reachy_daemon_url)
     return ReachyDaemonREST(settings.reachy_daemon_url, audio_device=settings.audio_device)
 
+def _set_log_level(level: str):
+    """Set logging level from string."""
+    level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "CRITICAL": logging.CRITICAL,
+    }
+    log_level = level_map.get(level.upper(), logging.WARNING)
+    logging.getLogger().setLevel(log_level)
+    # Also update the root logger's handlers
+    for handler in logging.root.handlers:
+        handler.setLevel(log_level)
+
 @app.command()
 def run(
     aim_base_url: str = typer.Option(None, "--aim-base-url", help="Override AIM_BASE_URL"),
     reachy_daemon_url: str = typer.Option(None, "--reachy-daemon-url", help="Override REACHY_DAEMON_URL"),
     model: str = typer.Option(None, "--model", help="Override AIM_MODEL"),
+    log_level: str = typer.Option("WARNING", "--log-level", help="Set logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL"),
 ):
     """Run the interactive edge demo (sim-ready)."""
+    # Set logging level first
+    _set_log_level(log_level)
+    
     s = load_settings()
     if aim_base_url:
         s = Settings(**{**s.__dict__, "aim_base_url": aim_base_url.rstrip("/")})

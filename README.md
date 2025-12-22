@@ -66,7 +66,19 @@ AIM_BASE_URL=http://localhost:1234
 
 # For Mode B (AIM remote via SSH port forward):
 AIM_BASE_URL=http://127.0.0.1:8000
+
+# For Mode B (AIM remote - direct URL, if accessible):
+# AIM_BASE_URL=http://your-cluster-host:8000
+# Or with API key if required:
+# AIM_BASE_URL=http://your-cluster-host:8000
+# AIM_API_KEY=your-api-key-here
 ```
+
+**Note:** If you're connecting to a remote AIM endpoint:
+- If using SSH port forward: `ssh -L 8000:localhost:8000 user@cluster-host` then use `AIM_BASE_URL=http://127.0.0.1:8000`
+- If the endpoint is directly accessible: Use the full URL like `AIM_BASE_URL=http://cluster-host:8000`
+- If authentication is required: Set `AIM_API_KEY` in your `.env` file
+- If connection fails: Check the error message in the terminal - it will show the specific connection issue
 
 **3. Start the demo (two terminals):**
 
