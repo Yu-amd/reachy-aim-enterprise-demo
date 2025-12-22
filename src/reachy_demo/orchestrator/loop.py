@@ -66,7 +66,9 @@ def _handle_direct_command(cmd_text: str, robot: RobotAdapter, console: Console)
             gesture_name = args.strip()
             console.print(f"[cyan]Executing gesture:[/cyan] {gesture_name}")
             try:
+                logger.info(f"Executing gesture command: {gesture_name}")
                 robot.gesture(gesture_name)
+                logger.info(f"Gesture '{gesture_name}' completed successfully")
                 # Special feedback for sleep/wake gestures
                 if gesture_name == "goto_sleep":
                     console.print(f"[green]✓ Sleep gesture executed - robot is going to sleep[/green]")
@@ -75,13 +77,16 @@ def _handle_direct_command(cmd_text: str, robot: RobotAdapter, console: Console)
                 else:
                     console.print(f"[green]✓ Gesture '{gesture_name}' executed[/green]")
             except Exception as e:
+                logger.error(f"Gesture '{gesture_name}' failed: {e}", exc_info=True)
                 console.print(f"[red]✗ Gesture '{gesture_name}' failed:[/red] {e}")
                 # Show more details for debugging
                 error_str = str(e)
                 if hasattr(e, 'response') and e.response is not None:
                     console.print(f"[red]  Response status: {e.response.status_code}[/red]")
                     console.print(f"[red]  Response body: {e.response.text[:200]}[/red]")
-                logger.debug(f"Gesture error details: {e}", exc_info=True)
+                # For critical gestures, show full error
+                if gesture_name in ["goto_sleep", "wake_up"]:
+                    console.print(f"[yellow]  Full error details logged (check logs with --log-level DEBUG)[/yellow]")
             
         elif command == "reset":
             console.print("[cyan]Resetting robot to home position...[/cyan]")
@@ -224,7 +229,20 @@ def run_interactive_loop(
             
             logger.debug(f"Processing user input: '{user_text[:50]}...' (length: {len(user_text)})")
             
-            # Auto-wake robot if it's asleep (before processing any command or prompt)
+            # Check for direct command (bypasses LLM) - check BEFORE auto-wake
+            if user_text.lower().startswith("cmd:"):
+                cmd_lower = user_text.lower()
+                # Track sleep state BEFORE executing command
+                if "goto_sleep" in cmd_lower or "sleep" in cmd_lower:
+                    robot_is_asleep = True
+                elif "wake_up" in cmd_lower or "wake" in cmd_lower:
+                    robot_is_asleep = False
+                
+                # Execute command (don't auto-wake if user explicitly wants to sleep)
+                _handle_direct_command(user_text, robot, console)
+                continue
+            
+            # Auto-wake robot if it's asleep (only for regular prompts, not commands)
             if robot_is_asleep:
                 try:
                     robot.gesture("wake_up")
@@ -232,18 +250,6 @@ def run_interactive_loop(
                     time.sleep(0.5)  # Give wake animation time to start
                 except Exception:
                     pass  # Don't break if wake fails
-            
-            # Check for direct command (bypasses LLM)
-            if user_text.lower().startswith("cmd:"):
-                cmd_lower = user_text.lower()
-                # Track sleep state
-                if "goto_sleep" in cmd_lower or "sleep" in cmd_lower:
-                    robot_is_asleep = True
-                elif "wake_up" in cmd_lower or "wake" in cmd_lower:
-                    robot_is_asleep = False
-                
-                _handle_direct_command(user_text, robot, console)
-                continue
 
             # Start E2E timer
             t0 = time.perf_counter()

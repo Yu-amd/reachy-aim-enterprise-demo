@@ -58,6 +58,7 @@ class Settings:
     
     # Audio device for TTS (None = auto-detect, or specify ALSA device like "hw:1,0")
     audio_device: str | None = None
+    audio_volume: int = 100  # Audio volume percentage (0-200, default 100)
 
 def load_settings() -> Settings:
     base = _env("AIM_BASE_URL")
@@ -77,4 +78,5 @@ def load_settings() -> Settings:
         metrics_host=_env("EDGE_METRICS_HOST", "127.0.0.1") or "127.0.0.1",
         metrics_port=_env_int("EDGE_METRICS_PORT", 9100),
         audio_device=_env("AUDIO_DEVICE", None),
+        audio_volume=_env_int("AUDIO_VOLUME", 100),  # Default 100%, can go up to 200%
     )

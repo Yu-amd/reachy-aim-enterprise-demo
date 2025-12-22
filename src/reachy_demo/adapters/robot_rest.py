@@ -14,6 +14,15 @@ from .robot_base import RobotAdapter
 
 logger = logging.getLogger(__name__)
 
+# Suppress ALSA/JACK error messages globally (they're non-fatal but noisy)
+# These are warnings from audio libraries probing devices we don't use
+# We use PulseAudio/PipeWire for audio routing, so ALSA/JACK errors are harmless
+os.environ.setdefault('ALSA_CARD', '0')
+os.environ.setdefault('JACK_NO_AUDIO_RESERVATION', '1')
+# Suppress PulseAudio warnings about missing devices
+if 'PULSE_LOG' not in os.environ:
+    os.environ['PULSE_LOG'] = '0'
+
 # Try to import pyttsx3 for fallback TTS
 try:
     import pyttsx3
@@ -22,15 +31,34 @@ except ImportError:
     PYTTSX3_AVAILABLE = False
     pyttsx3 = None
 
-# Try to import piper-tts for natural voice (best quality)
+# Try to import edge-tts for high-quality natural voice (Microsoft Edge TTS - best quality)
+# Optional dependency: pip install edge-tts
+try:
+    import edge_tts  # type: ignore
+    EDGE_TTS_AVAILABLE = True
+except ImportError:
+    EDGE_TTS_AVAILABLE = False
+    edge_tts = None
+
+# Try to import piper-tts for natural voice (good quality, offline)
 # Optional dependency: pip install piper-tts pyaudio
 try:
     from piper import PiperVoice  # type: ignore
-    from piper.download import ensure_voice_exists, find_voice  # type: ignore
     PIPER_AVAILABLE = True
+    # Try to import download utilities if available (may not exist in all versions)
+    try:
+        from piper.download import ensure_voice_exists, find_voice  # type: ignore
+        PIPER_DOWNLOAD_AVAILABLE = True
+    except ImportError:
+        PIPER_DOWNLOAD_AVAILABLE = False
+        ensure_voice_exists = None
+        find_voice = None
 except ImportError:
     PIPER_AVAILABLE = False
+    PIPER_DOWNLOAD_AVAILABLE = False
     PiperVoice = None
+    ensure_voice_exists = None
+    find_voice = None
 
 class ReachyDaemonREST(RobotAdapter):
     """REST adapter against reachy-mini-daemon.
@@ -39,14 +67,15 @@ class ReachyDaemonREST(RobotAdapter):
     Supports gestures, state queries, and health checks.
     """
 
-    def __init__(self, base_url: str, audio_device: Optional[str] = None):
+    def __init__(self, base_url: str, audio_device: Optional[str] = None, audio_volume: int = 100):
         self.base_url = base_url.rstrip("/")
         self._startup_logged = False
-        self._tts_method: Optional[str] = None  # "daemon", "piper", "system", or None
+        self._tts_method: Optional[str] = None  # "daemon", "edge", "piper", "system", or None
         self._tts_engine = None
         self._tts_checked = False
         self._tts_daemon_endpoint: Optional[str] = None
         self._piper_voice = None  # Piper voice model
+        self._edge_tts_voice: Optional[str] = None  # Edge TTS voice name
         self._talk_motion_active = False  # Track if talk motion is running
         self._tts_lock = threading.Lock()  # Prevent concurrent TTS calls
         self._current_tts_processes = []  # Track running TTS processes to kill on overlap
@@ -54,6 +83,7 @@ class ReachyDaemonREST(RobotAdapter):
         self._home_pose_captured = False  # Track if we've captured home pose
         self._audio_device: Optional[str] = audio_device  # ALSA device for robot speaker (e.g., "hw:1,0")
         self._audio_device_detected: Optional[str] = None  # Auto-detected audio device
+        self._audio_volume: int = max(0, min(200, audio_volume))  # Volume percentage (0-200), clamped
 
     def _get(self, path: str) -> requests.Response:
         return requests.get(f"{self.base_url}{path}", timeout=1.0)
@@ -176,6 +206,86 @@ class ReachyDaemonREST(RobotAdapter):
             self._audio_device_detected = None
             return None
     
+    def _set_audio_volume(self, sink_id: Optional[str] = None) -> None:
+        """Set audio volume for the Reachy Mini speaker.
+        
+        Tries Reachy daemon API first (most reliable), then falls back to PulseAudio.
+        This is non-blocking - failures are logged but don't prevent TTS from working.
+        
+        Args:
+            sink_id: PulseAudio sink name (for fallback). If None, will try to auto-detect.
+        """
+        if self._audio_volume == 100:
+            return  # No need to set volume if it's already at 100%
+        
+        # Try Reachy daemon API first (most reliable, controls hardware directly)
+        # Use a short timeout to avoid blocking TTS
+        try:
+            # Reachy daemon expects volume as 0-100 (not percentage)
+            # Our _audio_volume is already 0-200, so convert to 0-100 for daemon
+            daemon_volume = min(100, int(self._audio_volume))
+            # Use shorter timeout for volume setting (don't block TTS)
+            url = f"{self.base_url}/api/volume/set"
+            response = requests.post(url, json={"volume": daemon_volume}, timeout=1.0)
+            if response.status_code == 200:
+                logger.debug(f"🔊 Set Reachy Mini volume to {self._audio_volume}% via daemon API (daemon: {daemon_volume})")
+                return  # Success - no need to try PulseAudio
+            else:
+                logger.debug(f"Daemon volume API returned {response.status_code}, trying PulseAudio fallback")
+        except requests.exceptions.Timeout:
+            logger.debug("Daemon volume API timeout (non-critical), continuing with TTS")
+        except Exception as daemon_error:
+            # Don't log as warning - daemon API might not be available, that's OK
+            logger.debug(f"Daemon volume API not available: {daemon_error}, trying PulseAudio fallback")
+        
+        # Fallback to PulseAudio (may be overridden by OS, but worth trying)
+        try:
+            # Find the sink to use
+            if not sink_id:
+                # Try to find the Reachy Mini sink
+                sink_result = subprocess.run(
+                    ['pactl', 'list', 'sinks', 'short'],
+                    capture_output=True,
+                    text=True,
+                    timeout=2.0
+                )
+                if sink_result.returncode == 0:
+                    for line in sink_result.stdout.split('\n'):
+                        if 'Reachy' in line or 'Pollen' in line:
+                            sink_id = line.split()[1]  # Second column is sink name
+                            break
+            
+            if sink_id:
+                # Set volume using percentage format (PulseAudio accepts percentages like "150%")
+                volume_percent = f"{self._audio_volume}%"
+                result = subprocess.run(
+                    ['pactl', 'set-sink-volume', sink_id, volume_percent],
+                    capture_output=True,
+                    text=True,
+                    timeout=2.0
+                )
+                if result.returncode == 0:
+                    logger.info(f"🔊 Set Reachy Mini audio volume to {self._audio_volume}% via PulseAudio (sink: {sink_id})")
+                else:
+                    logger.warning(f"⚠ Could not set PulseAudio volume: {result.stderr}")
+                    # Try alternative: set as default sink first, then set volume
+                    try:
+                        subprocess.run(
+                            ['pactl', 'set-default-sink', sink_id],
+                            capture_output=True,
+                            timeout=1.0
+                        )
+                        subprocess.run(
+                            ['pactl', 'set-sink-volume', '@DEFAULT_SINK@', volume_percent],
+                            capture_output=True,
+                            timeout=2.0
+                        )
+                        logger.info(f"🔊 Set volume via default sink to {self._audio_volume}%")
+                    except Exception:
+                        pass
+        except Exception as vol_error:
+            logger.warning(f"⚠ Could not set audio volume via PulseAudio: {vol_error}")
+    
     def _check_tts_availability(self) -> None:
         """Check which TTS method is available: daemon API first, then Piper, then espeak fallback."""
         if self._tts_checked:
@@ -207,64 +317,182 @@ class ReachyDaemonREST(RobotAdapter):
             except Exception:
                 continue
         
-        # Try Piper TTS (best quality, natural voice)
+        # Try Edge TTS (highest quality, natural voice - Microsoft Edge TTS)
+        if EDGE_TTS_AVAILABLE:
+            try:
+                self._tts_method = "edge"
+                logger.info("✓ TTS: Using Edge TTS (high-quality, natural voice)")
+                return
+            except Exception as e:
+                logger.debug(f"Edge TTS initialization failed: {e}, trying Piper")
+        
+        # Try Piper TTS (good quality, natural voice - offline option)
         if PIPER_AVAILABLE:
             try:
-                # Try multiple voice options (in order of preference)
+                # Try multiple voice options (in order of preference - highest quality first)
+                # These are the most natural-sounding Piper voices
                 voice_options = [
-                    "en_US-lessac-medium",  # High quality, natural voice
-                    "en_US-lessac-low",     # Lower quality but smaller file
-                    "en_US-joe-medium",     # Alternative voice
+                    "en_US-lessac-high",      # Highest quality, most natural (best for Multiverse-like quality)
+                    "en_US-lessac-medium",    # High quality, natural voice
+                    "en_US-amy-medium",       # Alternative high-quality female voice
+                    "en_US-joe-medium",       # High-quality male voice alternative
+                    "en_US-lessac-low",       # Lower quality but smaller file (fallback)
                 ]
                 
                 for voice_name in voice_options:
                     try:
-                        # Try to find voice in common locations
-                        voice_paths = [
-                            f"./voices/{voice_name}.onnx",
-                            f"~/.local/share/piper/voices/{voice_name}.onnx",
-                            f"/usr/share/piper/voices/{voice_name}.onnx",
-                        ]
-                        
                         voice_path = None
-                        for path in voice_paths:
-                            expanded_path = os.path.expanduser(path)
-                            if os.path.exists(expanded_path):
-                                voice_path = expanded_path
-                                break
                         
-                        # If not found, try downloading via piper-tts CLI (if available)
+                        # First, try using piper's built-in download mechanism (if available)
+                        if PIPER_DOWNLOAD_AVAILABLE and ensure_voice_exists:
+                            try:
+                                # Use ensure_voice_exists to download if needed
+                                voice_path = ensure_voice_exists(voice_name, [])
+                                if voice_path and os.path.exists(voice_path):
+                                    logger.debug(f"Found/downloaded Piper voice: {voice_name} at {voice_path}")
+                            except Exception as download_error:
+                                logger.debug(f"Piper download mechanism failed for {voice_name}: {download_error}")
+                                # Fall back to manual path checking
+                                voice_path = None
+                        
+                        # If download didn't work, try to find voice in common locations
+                        if not voice_path:
+                            voice_paths = [
+                                f"{os.path.expanduser('~')}/.local/share/piper/voices/{voice_name}.onnx",  # Check this first (most common)
+                                f"~/.local/share/piper/voices/{voice_name}.onnx",
+                                f"./voices/{voice_name}.onnx",
+                                f"/usr/share/piper/voices/{voice_name}.onnx",
+                            ]
+                            
+                            for path in voice_paths:
+                                expanded_path = os.path.expanduser(path)
+                                if os.path.exists(expanded_path) and os.path.getsize(expanded_path) > 0:
+                                    voice_path = expanded_path
+                                    logger.debug(f"Found Piper voice at {voice_path} (size: {os.path.getsize(expanded_path)} bytes)")
+                                    break
+                        
+                        # If still not found, try downloading via piper-tts CLI (if available)
                         if not voice_path:
                             try:
                                 # Try to download voice using piper-tts CLI
-                                import subprocess
                                 result = subprocess.run(
                                     ['piper-tts', '--download', voice_name],
                                     capture_output=True,
-                                    timeout=60
+                                    timeout=120  # Longer timeout for downloads
                                 )
                                 if result.returncode == 0:
-                                    # Try to find the downloaded voice
-                                    for path in voice_paths:
+                                    # Try to find the downloaded voice in common locations
+                                    download_paths = [
+                                        f"./voices/{voice_name}.onnx",
+                                        f"~/.local/share/piper/voices/{voice_name}.onnx",
+                                        f"/usr/share/piper/voices/{voice_name}.onnx",
+                                        f"{os.path.expanduser('~')}/.local/share/piper/voices/{voice_name}.onnx",
+                                    ]
+                                    for path in download_paths:
                                         expanded_path = os.path.expanduser(path)
                                         if os.path.exists(expanded_path):
                                             voice_path = expanded_path
                                             break
-                            except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
-                                pass
+                            except (FileNotFoundError, subprocess.TimeoutExpired, Exception) as cli_error:
+                                logger.debug(f"piper-tts CLI download failed: {cli_error}")
+                                # Try direct download from HuggingFace
+                                if not voice_path:
+                                    try:
+                                        import requests
+                                        logger.info(f"Downloading Piper voice '{voice_name}' from HuggingFace...")
+                                        # Map voice names to HuggingFace paths
+                                        voice_map = {
+                                            "en_US-lessac-high": "en/en_US/lessac/high/en_US-lessac-high.onnx",
+                                            "en_US-lessac-medium": "en/en_US/lessac/medium/en_US-lessac-medium.onnx",
+                                            "en_US-lessac-low": "en/en_US/lessac/low/en_US-lessac-low.onnx",
+                                            "en_US-amy-medium": "en/en_US/amy/medium/en_US-amy-medium.onnx",
+                                            "en_US-joe-medium": "en/en_US/joe/medium/en_US-joe-medium.onnx",
+                                        }
+                                        
+                                        if voice_name in voice_map:
+                                            # Download both .onnx and .json files
+                                            base_path = voice_map[voice_name].replace('.onnx', '')
+                                            onnx_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/{base_path}.onnx"
+                                            json_url = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/{base_path}.onnx.json"
+                                            
+                                            voices_dir = os.path.expanduser("~/.local/share/piper/voices")
+                                            os.makedirs(voices_dir, exist_ok=True)
+                                            voice_path = os.path.join(voices_dir, f"{voice_name}.onnx")
+                                            json_path = os.path.join(voices_dir, f"{voice_name}.onnx.json")
+                                            
+                                            # Check if both files exist
+                                            if os.path.exists(voice_path) and os.path.exists(json_path):
+                                                logger.debug(f"Voice files already exist at {voice_path}")
+                                                # Verify they're valid
+                                                if os.path.getsize(voice_path) == 0 or os.path.getsize(json_path) == 0:
+                                                    logger.warning(f"Voice files are empty, will re-download")
+                                                    if os.path.exists(voice_path):
+                                                        os.remove(voice_path)
+                                                    if os.path.exists(json_path):
+                                                        os.remove(json_path)
+                                                    voice_path = None
+                                            else:
+                                                # Download .onnx file
+                                                logger.info(f"Downloading Piper voice '{voice_name}' from HuggingFace...")
+                                                response = requests.get(onnx_url, stream=True, timeout=180)
+                                                if response.status_code == 200:
+                                                    with open(voice_path, 'wb') as f:
+                                                        for chunk in response.iter_content(chunk_size=8192):
+                                                            f.write(chunk)
+                                                    logger.debug(f"Downloaded .onnx file: {voice_path}")
+                                                else:
+                                                    logger.warning(f"Failed to download .onnx: HTTP {response.status_code}")
+                                                    voice_path = None
+                                                
+                                                # Download .json config file
+                                                if voice_path and os.path.exists(voice_path):
+                                                    json_response = requests.get(json_url, stream=True, timeout=60)
+                                                    if json_response.status_code == 200:
+                                                        with open(json_path, 'wb') as f:
+                                                            for chunk in json_response.iter_content(chunk_size=8192):
+                                                                f.write(chunk)
+                                                        logger.debug(f"Downloaded .json config: {json_path}")
+                                                        logger.info(f"✓ Downloaded Piper voice '{voice_name}' to {voice_path}")
+                                                    else:
+                                                        logger.warning(f"Failed to download .json config: HTTP {json_response.status_code}")
+                                                        if os.path.exists(voice_path):
+                                                            os.remove(voice_path)
+                                                        voice_path = None
+                                    except Exception as download_error:
+                                        logger.debug(f"Direct download failed: {download_error}")
+                                        voice_path = None
+                                        
+                                        # If download failed, try to find if it was already downloaded
+                                        if not voice_path:
+                                            download_paths = [
+                                                f"~/.local/share/piper/voices/{voice_name}.onnx",
+                                                f"{os.path.expanduser('~')}/.local/share/piper/voices/{voice_name}.onnx",
+                                            ]
+                                            for path in download_paths:
+                                                expanded_path = os.path.expanduser(path)
+                                                if os.path.exists(expanded_path):
+                                                    voice_path = expanded_path
+                                                    break
                         
                         if voice_path and os.path.exists(voice_path):
+                            # Load the voice model
                             self._piper_voice = PiperVoice.load(voice_path)
                             self._tts_method = "piper"
-                            logger.info(f"✓ TTS: Using Piper (natural voice: {voice_name})")
+                            quality = "high" if "high" in voice_name else ("medium" if "medium" in voice_name else "low")
+                            logger.info(f"✓ TTS: Using Piper {quality}-quality voice ({voice_name}) - natural, Multiverse-like quality")
                             return
                     except Exception as e:
                         logger.debug(f"Piper voice {voice_name} not available: {e}, trying next option")
                         continue
                 
-                logger.debug("No Piper voices found, falling back to espeak")
+                # No voices found - log helpful message
+                logger.warning("⚠ No Piper voices found. To get natural voice quality:")
+                logger.warning("  1. Download a voice: piper-tts --download en_US-lessac-medium")
+                logger.warning("  2. Or install voices to ~/.local/share/piper/voices/")
+                logger.warning("  Falling back to espeak (robotic voice)")
             except Exception as e:
-                logger.debug(f"Piper initialization failed: {e}, trying espeak fallback")
+                logger.warning(f"⚠ Piper initialization failed: {e}, trying espeak fallback")
+                logger.debug(f"Piper error details: {e}", exc_info=True)
         
         # Fall back to espeak (just works)
         if PYTTSX3_AVAILABLE:
@@ -445,18 +673,71 @@ class ReachyDaemonREST(RobotAdapter):
                     raise
             elif name == "goto_sleep":
                 try:
-                    logger.debug("🤖 Executing goto_sleep gesture...")
-                    response = self._post("/api/move/play/goto_sleep")
-                    response.raise_for_status()  # Raise exception if HTTP error
-                    logger.debug("🤖 Sleep gesture API call successful")
-                    # Give sleep animation time to complete (sleep animation is typically 2-3 seconds)
-                    # The daemon returns immediately with a UUID, but the animation takes time
-                    time.sleep(3.0)  # Wait for full sleep animation to complete
-                    logger.debug("🤖 Sleep animation should be complete")
+                    # Stop any ongoing talk motion that might interfere
+                    self._talk_motion_active = False
+                    # Wait longer to ensure any ongoing movements have fully stopped
+                    time.sleep(0.5)  # Increased pause to let any ongoing movements settle
+                    
+                    # Check robot state before gesture
+                    state_before = self.get_state()
+                    logger.info(f"🤖 Robot state before goto_sleep: head={state_before.get('head_pose', {})}, antennas={state_before.get('antennas_position', [])}")
+                    
+                    logger.info("🤖 Executing goto_sleep gesture...")
+                    # Try POST with empty JSON body first
+                    try:
+                        response = self._post("/api/move/play/goto_sleep", json={})
+                        response.raise_for_status()
+                    except requests.exceptions.RequestException as first_error:
+                        # If that fails, try without JSON body
+                        logger.warning(f"🤖 First attempt failed: {first_error}, retrying without JSON body...")
+                        time.sleep(0.2)  # Brief pause before retry
+                        response = self._post("/api/move/play/goto_sleep", json=None)
+                        response.raise_for_status()
+                    
+                    logger.info(f"🤖 Sleep gesture API call successful (status: {response.status_code})")
+                    
+                    # Log response body for debugging
+                    animation_uuid = None
+                    try:
+                        response_data = response.json() if response.text else None
+                        if response_data:
+                            logger.info(f"🤖 Sleep gesture response: {response_data}")
+                            # If response contains UUID, the animation was queued
+                            if isinstance(response_data, dict) and 'uuid' in response_data:
+                                animation_uuid = response_data['uuid']
+                                logger.info(f"🤖 Sleep animation queued with UUID: {animation_uuid}")
+                    except Exception:
+                        logger.debug(f"🤖 Sleep gesture response text: {response.text[:100]}")
+                    
+                    # IMPORTANT: The daemon returns immediately with a UUID, but the animation takes time
+                    # Wait longer to ensure the animation has time to execute on the hardware
+                    logger.info("🤖 Waiting for sleep animation to complete (4 seconds)...")
+                    time.sleep(4.0)  # Increased wait time for hardware to execute animation
+                    
+                    # Check robot state after gesture
+                    state_after = self.get_state()
+                    logger.info(f"🤖 Robot state after goto_sleep: head={state_after.get('head_pose', {})}, antennas={state_after.get('antennas_position', [])}")
+                    
+                    # Check if state changed significantly (not just sensor drift)
+                    head_before = state_before.get('head_pose', {})
+                    head_after = state_after.get('head_pose', {})
+                    pitch_change = abs(head_after.get('pitch', 0) - head_before.get('pitch', 0))
+                    yaw_change = abs(head_after.get('yaw', 0) - head_before.get('yaw', 0))
+                    
+                    if pitch_change > 0.1 or yaw_change > 0.1:
+                        logger.info(f"🤖 Robot state changed significantly (pitch: {pitch_change:.3f}, yaw: {yaw_change:.3f}) - sleep animation appears to have executed")
+                    else:
+                        logger.warning(f"🤖 Robot state changed minimally (pitch: {pitch_change:.3f}, yaw: {yaw_change:.3f}) - sleep animation may not have executed on hardware")
+                        logger.warning("🤖 This could indicate a daemon or hardware issue - check daemon logs")
+                    
+                    logger.info("🤖 Sleep animation should be complete")
                 except requests.exceptions.RequestException as e:
                     logger.error(f"🤖 Failed to execute goto_sleep gesture: {e}")
                     if hasattr(e, 'response') and e.response is not None:
                         logger.error(f"Response status: {e.response.status_code}, body: {e.response.text[:200]}")
+                    raise
+                except Exception as e:
+                    logger.error(f"🤖 Unexpected error in goto_sleep gesture: {e}", exc_info=True)
                     raise
             elif name.startswith("recorded:"):
                 # Support for recorded moves: "recorded:dataset_name:move_name"
@@ -479,9 +760,18 @@ class ReachyDaemonREST(RobotAdapter):
                     # If recorded move fails, fall back to nod
                     logger.debug(f"Recorded move '{name}' not found, falling back to nod")
                     self._nod_gesture()
-        except Exception:
-            # Fail silently - don't break the demo if gesture fails
-            pass
+        except requests.exceptions.RequestException as e:
+            # Re-raise HTTP/network errors so they can be handled by caller
+            logger.error(f"🤖 Gesture '{name}' failed with network error: {e}")
+            raise
+        except Exception as e:
+            # Log other errors but don't break the demo
+            logger.warning(f"🤖 Gesture '{name}' failed: {e}")
+            # Only fail silently for unknown gestures, not for known gestures like goto_sleep
+            if name in ["goto_sleep", "wake_up"]:
+                # These are critical gestures - re-raise the error
+                raise
+            # For other gestures, fail silently to not break the demo
 
     def _nod_gesture(self) -> None:
         """Long, prominent head nod gesture with smooth, pronounced movement."""
@@ -1366,11 +1656,24 @@ class ReachyDaemonREST(RobotAdapter):
             self._kill_tts_processes()
         
             # Log the full text being spoken for debugging (only in debug mode)
-            logger.debug(f"🔊 TTS: Speaking full text ({len(text)} chars): '{text}'")
+            logger.info(f"🔊 TTS: Speaking text ({len(text)} chars) via {self._tts_method or 'unknown'} method")
         
         # Check TTS availability if not already checked (only check once)
         if not self._tts_checked:
             self._check_tts_availability()
+            # Log which TTS method will be used
+            if self._tts_method == "piper":
+                logger.info(f"✓ Using Piper TTS for natural voice (voice loaded: {self._piper_voice is not None})")
+            elif self._tts_method == "edge":
+                logger.info(f"✓ Using Edge TTS for natural voice")
+            elif self._tts_method == "espeak":
+                logger.warning("⚠ Using espeak TTS - voice will sound robotic/artificial. Install piper-tts for better quality.")
+            else:
+                logger.warning(f"⚠ Using {self._tts_method} TTS - quality may vary")
+        
+        # Log current TTS method (every time for debugging)
+        if not self._tts_method:
+            logger.error("⚠ No TTS method available! TTS will not work.")
         
         # Estimate duration based on text length (rough: ~150 words per minute = 2.5 words/sec)
         # Average word length ~5 chars, so ~12.5 chars/sec, or ~0.08 sec/char
@@ -1388,20 +1691,30 @@ class ReachyDaemonREST(RobotAdapter):
         
         # Speak using available method
         actual_duration = estimated_duration
-        if self._tts_method == "daemon":
-            actual_duration = self._speak_via_daemon(text)
-        elif self._tts_method == "piper":
-            actual_duration = self._speak_via_piper(text)
-        elif self._tts_method == "system":
-            actual_duration = self._speak_via_system(text)
-        else:
-            # Fallback: try espeak directly if no method is available
-            logger.warning(f"🔊 TTS method unavailable, trying espeak fallback: '{text[:50]}{'...' if len(text) > 50 else ''}'")
-            try:
-                actual_duration = self._speak_via_espeak(text)
-            except Exception as e:
-                logger.error(f"⚠ TTS fallback also failed: {e}")
-                actual_duration = estimated_duration
+        try:
+            if self._tts_method == "daemon":
+                logger.debug("🔊 Calling _speak_via_daemon")
+                actual_duration = self._speak_via_daemon(text)
+            elif self._tts_method == "edge":
+                logger.debug("🔊 Calling _speak_via_edge")
+                actual_duration = self._speak_via_edge(text)
+            elif self._tts_method == "piper":
+                logger.debug("🔊 Calling _speak_via_piper")
+                actual_duration = self._speak_via_piper(text)
+            elif self._tts_method == "system":
+                logger.debug("🔊 Calling _speak_via_system")
+                actual_duration = self._speak_via_system(text)
+            else:
+                # Fallback: try espeak directly if no method is available
+                logger.warning(f"🔊 TTS method unavailable, trying espeak fallback: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+                try:
+                    actual_duration = self._speak_via_espeak(text)
+                except Exception as e:
+                    logger.error(f"⚠ TTS fallback also failed: {e}", exc_info=True)
+                    actual_duration = estimated_duration
+        except Exception as e:
+            logger.error(f"⚠ TTS execution failed: {e}", exc_info=True)
+            actual_duration = estimated_duration
         
         # Stop motion loop before returning
         self._talk_motion_active = False
@@ -1514,6 +1827,111 @@ class ReachyDaemonREST(RobotAdapter):
         finally:
             self._talk_motion_active = False
     
+    def _speak_via_edge(self, text: str) -> float:
+        """Speak text via Edge TTS (highest quality, natural voice). Returns audio duration in seconds."""
+        if not EDGE_TTS_AVAILABLE:
+            logger.warning("⚠ Edge TTS not available, falling back to Piper")
+            return self._speak_via_piper(text) if PIPER_AVAILABLE else self._speak_via_espeak(text)
+        
+        try:
+            import asyncio
+            import tempfile
+            
+            logger.debug(f"🔊 Speaking via Edge TTS: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+            
+            # Select a high-quality voice if not already selected
+            if not self._edge_tts_voice:
+                # Prefer natural-sounding English voices
+                preferred_voices = [
+                    "en-US-AriaNeural",  # Natural female voice
+                    "en-US-JennyNeural",  # Alternative natural female voice
+                    "en-US-GuyNeural",   # Natural male voice
+                    "en-US-DavisNeural", # Alternative male voice
+                ]
+                
+                # Try to get available voices and select best match
+                try:
+                    async def get_voice():
+                        voices = await edge_tts.list_voices()
+                        for preferred in preferred_voices:
+                            for voice in voices:
+                                if voice["ShortName"] == preferred:
+                                    return preferred
+                        # Fallback to first English US voice
+                        for voice in voices:
+                            if voice["Locale"].startswith("en-US"):
+                                return voice["ShortName"]
+                        return "en-US-AriaNeural"  # Default fallback
+                    
+                    self._edge_tts_voice = asyncio.run(get_voice())
+                    logger.info(f"✓ Selected Edge TTS voice: {self._edge_tts_voice}")
+                except Exception as e:
+                    logger.warning(f"Could not select Edge TTS voice: {e}, using default")
+                    self._edge_tts_voice = "en-US-AriaNeural"
+            
+            # Generate audio using Edge TTS
+            async def generate_audio():
+                communicate = edge_tts.Communicate(text, self._edge_tts_voice)
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as tmp_file:
+                    tmp_path = tmp_file.name
+                    await communicate.save(tmp_path)
+                    return tmp_path
+            
+            start_time = time.time()
+            audio_file = asyncio.run(generate_audio())
+            
+            try:
+                # Play audio using detected audio device (same routing logic as Piper)
+                audio_device = self._detect_audio_device()
+                
+                # Set volume before playing (if using PulseAudio and volume is not 100%)
+                sink_id = None
+                if audio_device and audio_device.startswith('pulse:'):
+                    sink_id = audio_device.split(':', 1)[1]
+                    play_cmd = ['paplay', '--device', sink_id, audio_file]
+                elif audio_device and audio_device.startswith('hw:'):
+                    # Route through PulseAudio (same logic as other TTS methods)
+                    card_num = audio_device.split(':')[1].split(',')[0]
+                    # Use same PulseAudio routing logic as espeak/Piper
+                    play_cmd = ['paplay', audio_file]  # Will use default sink
+                else:
+                    play_cmd = ['paplay', audio_file]
+                
+                # Set volume before playing
+                self._set_audio_volume(sink_id)
+                
+                # Play audio (suppress ALSA/JACK errors)
+                audio_env = {**os.environ, 'ALSA_CARD': '0', 'JACK_NO_AUDIO_RESERVATION': '1'}
+                play_proc = subprocess.Popen(
+                    play_cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=audio_env
+                )
+                self._current_tts_processes = [play_proc]
+                play_proc.wait(timeout=60)
+                self._current_tts_processes.clear()
+                
+                duration = time.time() - start_time
+                if play_proc.returncode == 0:
+                    logger.debug(f"✓ Edge TTS completed in {duration:.2f}s")
+                    return duration
+                else:
+                    # Fallback to estimated duration if playback failed
+                    estimated = max(0.5, len(text) * 0.08)
+                    return estimated
+            finally:
+                # Clean up temporary audio file
+                try:
+                    if os.path.exists(audio_file):
+                        os.unlink(audio_file)
+                except Exception:
+                    pass
+                    
+        except Exception as e:
+            logger.error(f"⚠ Edge TTS error: {e}", exc_info=True)
+            return self._speak_via_piper(text) if PIPER_AVAILABLE else self._speak_via_espeak(text)
+    
     def _speak_via_daemon(self, text: str) -> float:
         """Speak text via Reachy daemon API. Returns audio duration in seconds."""
         try:
@@ -1567,7 +1985,7 @@ class ReachyDaemonREST(RobotAdapter):
                 if pyaudio is None:
                     raise ImportError("pyaudio not available")
                 
-                # Suppress ALSA/PortAudio error messages (they're non-fatal but noisy)
+                # Suppress ALSA/PortAudio/JACK error messages (they're non-fatal but noisy)
                 # These errors come from PortAudio/ALSA C library and print directly to stderr
                 import os
                 import sys
@@ -1575,12 +1993,11 @@ class ReachyDaemonREST(RobotAdapter):
                 from io import StringIO
                 
                 # Set environment variables to suppress ALSA warnings
-                old_env = {}
-                for key in ['ALSA_CARD', 'PULSE_RUNTIME_PATH']:
-                    if key in os.environ:
-                        old_env[key] = os.environ[key]
+                os.environ['ALSA_CARD'] = '0'  # Suppress ALSA card probing errors
+                # Suppress JACK errors
+                os.environ['JACK_NO_AUDIO_RESERVATION'] = '1'
                 
-                # Redirect stderr to suppress ALSA/PortAudio errors
+                # Redirect stderr to suppress ALSA/PortAudio/JACK errors
                 stderr_capture = StringIO()
                 old_stderr = sys.stderr
                 
@@ -1648,6 +2065,8 @@ class ReachyDaemonREST(RobotAdapter):
                     sink_id = audio_device.split(':', 1)[1]
                     aplay_cmd = ['paplay', '--device', sink_id]
                     logger.info(f"🔊 Routing Piper audio to PulseAudio sink: {sink_id}")
+                    # Set volume before playing
+                    self._set_audio_volume(sink_id)
                 elif audio_device and audio_device.startswith('hw:'):
                     # ALSA device - find PulseAudio card and create/use its sink (same logic as espeak)
                     card_num = audio_device.split(':')[1].split(',')[0]
@@ -1726,20 +2145,45 @@ class ReachyDaemonREST(RobotAdapter):
                 if not aplay_cmd:
                     aplay_cmd = ['aplay', '-q']
                 
-                aplay_proc = subprocess.Popen(
-                    aplay_cmd,
-                    stdin=audio_stream,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
+                # Piper generates WAV format - ensure aplay/paplay handles it correctly
+                # Use proper WAV format flags for better quality
+                # Suppress ALSA/JACK errors from aplay/paplay (they're non-fatal)
+                # Create environment with ALSA/JACK suppression
+                audio_env = {**os.environ, 'ALSA_CARD': '0', 'JACK_NO_AUDIO_RESERVATION': '1'}
+                
+                if 'paplay' in aplay_cmd[0]:
+                    # paplay automatically detects WAV format
+                    aplay_proc = subprocess.Popen(
+                        aplay_cmd,
+                        stdin=audio_stream,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,  # Suppress ALSA/JACK errors
+                        env=audio_env
+                    )
+                else:
+                    # aplay needs explicit format for WAV
+                    # Add format specification: -f cd (16-bit, 44100 Hz, stereo) or -f dat (16-bit, 48000 Hz, stereo)
+                    # But WAV header should contain format info, so try without first
+                    aplay_proc = subprocess.Popen(
+                        aplay_cmd + ['-f', 'cd'],  # CD quality: 16-bit, 44100 Hz, stereo
+                        stdin=audio_stream,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,  # Suppress ALSA/JACK errors
+                        env=audio_env
+                    )
+                
                 # Track process
                 self._current_tts_processes = [aplay_proc]
-                aplay_proc.wait(timeout=30)
+                start_time = time.time()
+                aplay_proc.wait(timeout=60)  # Longer timeout for high-quality audio
+                duration = time.time() - start_time
                 self._current_tts_processes.clear()
                 if aplay_proc.returncode == 0:
-                    return max(0.5, len(text) * 0.08)
+                    logger.debug(f"✓ Piper TTS completed via aplay/paplay in {duration:.2f}s")
+                    return duration
                 else:
-                    raise
+                    logger.warning(f"⚠ aplay/paplay failed with return code {aplay_proc.returncode}")
+                    raise subprocess.CalledProcessError(aplay_proc.returncode, aplay_cmd)
         except Exception as e:
             logger.warning(f"⚠ Piper TTS error: {e}, falling back to espeak")
             self._kill_tts_processes()
@@ -1785,6 +2229,8 @@ class ReachyDaemonREST(RobotAdapter):
                     sink_id = audio_device.split(':', 1)[1]
                     aplay_cmd = ['paplay', '--device', sink_id]
                     logger.info(f"🔊 Routing audio to PulseAudio sink: {sink_id}")
+                    # Set volume before playing
+                    self._set_audio_volume(sink_id)
                 elif audio_device and audio_device.startswith('hw:'):
                     # ALSA device - find PulseAudio card and create/use its sink
                     card_num = audio_device.split(':')[1].split(',')[0]
@@ -1875,6 +2321,8 @@ class ReachyDaemonREST(RobotAdapter):
                         
                         # Step 4: Use the sink if found - set as default temporarily
                         if sink_found:
+                            # Set volume before playing
+                            self._set_audio_volume(sink_found)
                             # Store current default to restore later
                             current_default_sink = None
                             try:

@@ -23,7 +23,7 @@ console = Console()
 def _make_robot(settings: Settings):
     if settings.robot_mode.lower() == "sim":
         return SimRobot(settings.reachy_daemon_url)
-    return ReachyDaemonREST(settings.reachy_daemon_url, audio_device=settings.audio_device)
+    return ReachyDaemonREST(settings.reachy_daemon_url, audio_device=settings.audio_device, audio_volume=settings.audio_volume)
 
 def _set_log_level(level: str):
     """Set logging level from string."""
