@@ -365,8 +365,14 @@ Text-to-Speech:
 - TTS method is auto-detected: tries daemon API first (`/api/speak`, `/api/tts`, etc.), falls back to system TTS (pyttsx3)
 - In sim mode: Typically uses system TTS (pyttsx3) which plays through your computer's speakers
 - In hardware mode: Will use daemon API if available (robot's speakers), otherwise falls back to system TTS
+- **Audio Device Routing**: The TTS system can automatically detect and route audio to the Reachy Mini's built-in speaker
+  - Auto-detection: Looks for USB audio devices (common for Reachy Mini)
+  - Manual configuration: Set `AUDIO_DEVICE` in `.env` (e.g., `AUDIO_DEVICE=hw:1,0`)
+  - To find your audio device: Run `aplay -l` and look for USB/Reachy devices
+  - **📖 Full setup guide**: See [docs/audio-setup.md](docs/audio-setup.md) for step-by-step instructions
 - System TTS works offline and cross-platform (Windows, Linux, macOS)
 - You'll see a startup message indicating which TTS method is being used (e.g., `✓ TTS: Using system TTS (pyttsx3)`)
+- If audio device is detected: `✓ Detected Reachy Mini audio device: hw:1,0`
 
 ### Step 6: (Optional) Monitor Metrics and Observability
 
@@ -802,6 +808,7 @@ Fully Implemented:
 | `E2E_SLO_MS` | No | `2500` | End-to-end SLO in milliseconds |
 | `EDGE_METRICS_HOST` | No | `127.0.0.1` | Metrics server host |
 | `EDGE_METRICS_PORT` | No | `9100` | Metrics server port |
+| `AUDIO_DEVICE` | No | `None` (auto-detect) | ALSA audio device for robot speaker (e.g., `hw:1,0`). If not set, will auto-detect USB audio devices. Use `aplay -l` to list available devices. |
 
 ## Connect to a Physical Robot
 
@@ -839,8 +846,12 @@ Fully Implemented:
 3. Customize speech (optional):
    - TTS is already implemented with daemon API + system TTS fallback
    - Robot automatically speaks AIM responses
+   - **Audio Device Routing**: To use the Reachy Mini's built-in speaker:
+     - Auto-detection: The system will automatically detect USB audio devices
+     - Manual configuration: Add `AUDIO_DEVICE=hw:1,0` to your `.env` file (find your device with `aplay -l`)
+     - The TTS will route audio to the robot's speaker instead of your laptop speakers
    - To customize: see `docs/tts-implementation.md` for advanced options (cloud TTS, async, etc.)
-   - Current implementation: daemon API (if available) → system TTS (pyttsx3) fallback
+   - Current implementation: daemon API (if available) → system TTS (pyttsx3) fallback → audio device routing
 
 ## Additional Notes
 

@@ -14,13 +14,14 @@ src_path = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(src_path))
 
 from reachy_demo.adapters.robot_rest import ReachyDaemonREST
+from reachy_demo.config import load_settings
 from rich.console import Console
 from rich.panel import Panel
 
 console = Console()
 
 
-def test_tts(daemon_url: str = "http://127.0.0.1:8001"):
+def test_tts(daemon_url: str = "http://127.0.0.1:8001", audio_device: str | None = None):
     """Test TTS functionality."""
     console.print(Panel.fit(
         "[bold cyan]TTS Test Tool[/bold cyan]\n\n"
@@ -29,7 +30,7 @@ def test_tts(daemon_url: str = "http://127.0.0.1:8001"):
     ))
     
     try:
-        robot = ReachyDaemonREST(daemon_url)
+        robot = ReachyDaemonREST(daemon_url, audio_device=audio_device)
         
         # Check robot health and TTS availability
         console.print("\n[bold]Step 1: Checking robot connection...[/bold]")
@@ -101,7 +102,22 @@ if __name__ == "__main__":
         default="http://127.0.0.1:8001",
         help="Reachy daemon URL (default: http://127.0.0.1:8001)"
     )
+    parser.add_argument(
+        "--audio-device",
+        type=str,
+        default=None,
+        help="ALSA audio device (e.g., hw:1,0). If not specified, will auto-detect or use system default."
+    )
     
     args = parser.parse_args()
-    test_tts(args.daemon_url)
+    # If audio_device not provided, try to load from settings
+    audio_device = args.audio_device
+    if audio_device is None:
+        try:
+            settings = load_settings()
+            audio_device = settings.audio_device
+        except Exception:
+            pass
+    
+    test_tts(args.daemon_url, audio_device=audio_device)
 

@@ -38,7 +38,7 @@ class ReachyDaemonREST(RobotAdapter):
     Supports gestures, state queries, and health checks.
     """
 
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, audio_device: Optional[str] = None):
         self.base_url = base_url.rstrip("/")
         self._startup_logged = False
         self._tts_method: Optional[str] = None  # "daemon", "piper", "system", or None
@@ -51,6 +51,8 @@ class ReachyDaemonREST(RobotAdapter):
         self._current_tts_processes = []  # Track running TTS processes to kill on overlap
         self._home_pose: Optional[Dict[str, Any]] = None  # Cache home position
         self._home_pose_captured = False  # Track if we've captured home pose
+        self._audio_device: Optional[str] = audio_device  # ALSA device for robot speaker (e.g., "hw:1,0")
+        self._audio_device_detected: Optional[str] = None  # Auto-detected audio device
 
     def _get(self, path: str) -> requests.Response:
         return requests.get(f"{self.base_url}{path}", timeout=1.0)
@@ -85,12 +87,103 @@ class ReachyDaemonREST(RobotAdapter):
                 self._startup_logged = True
             return False
     
+    def _detect_audio_device(self) -> Optional[str]:
+        """Detect Reachy Mini audio device by looking for USB audio devices.
+        
+        Returns ALSA device string (e.g., "hw:1,0"), PulseAudio sink name, or None if not found.
+        Tries PulseAudio first (works with PipeWire), then falls back to ALSA.
+        """
+        if self._audio_device:
+            # Use explicitly configured device
+            return self._audio_device
+        
+        if self._audio_device_detected is not None:
+            # Return cached detection result
+            return self._audio_device_detected
+        
+        # Try PulseAudio first (works with PipeWire)
+        try:
+            result = subprocess.run(
+                ['pactl', 'list', 'short', 'sinks'],
+                capture_output=True,
+                text=True,
+                timeout=2.0
+            )
+            
+            if result.returncode == 0:
+                lines = result.stdout.split('\n')
+                for line in lines:
+                    if line.strip():
+                        parts = line.split('\t')
+                        if len(parts) >= 2:
+                            sink_name = parts[1].lower()
+                            # Look for Reachy or USB in sink name
+                            if 'reachy' in sink_name or ('usb' in sink_name and 'audio' in sink_name):
+                                # Use PulseAudio sink name
+                                device_str = f"pulse:{parts[0]}"  # Use sink index
+                                logger.info(f"✓ Detected Reachy Mini audio device (PulseAudio): {parts[1]} (sink {parts[0]})")
+                                self._audio_device_detected = device_str
+                                return device_str
+        except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+            pass
+        
+        # Fall back to ALSA detection
+        try:
+            # Run aplay -l to list audio devices
+            result = subprocess.run(
+                ['aplay', '-l'],
+                capture_output=True,
+                text=True,
+                timeout=2.0
+            )
+            
+            if result.returncode != 0:
+                logger.debug("Could not list audio devices (aplay -l failed)")
+                self._audio_device_detected = None
+                return None
+            
+            lines = result.stdout.split('\n')
+            # Look for USB audio devices (common for Reachy Mini)
+            # Also look for devices with "Reachy" or "USB" in the name
+            for i, line in enumerate(lines):
+                if 'card' in line.lower() and ('usb' in line.lower() or 'reachy' in line.lower()):
+                    # Extract card number (format: "card X:")
+                    match = re.search(r'card\s+(\d+)', line)
+                    if match:
+                        card_num = match.group(1)
+                        # Try to find device number (usually 0 for first device)
+                        device_num = 0
+                        # Check next few lines for device number
+                        for j in range(i+1, min(i+5, len(lines))):
+                            dev_match = re.search(r'device\s+(\d+)', lines[j])
+                            if dev_match:
+                                device_num = int(dev_match.group(1))
+                                break
+                        
+                        device_str = f"hw:{card_num},{device_num}"
+                        logger.info(f"✓ Detected Reachy Mini audio device (ALSA): {device_str} ({line.strip()})")
+                        self._audio_device_detected = device_str
+                        return device_str
+            
+            # If no USB/Reachy device found, return None (use default)
+            logger.debug("No Reachy Mini audio device detected, using system default")
+            self._audio_device_detected = None
+            return None
+            
+        except (FileNotFoundError, subprocess.TimeoutExpired, Exception) as e:
+            logger.debug(f"Audio device detection failed: {e}")
+            self._audio_device_detected = None
+            return None
+    
     def _check_tts_availability(self) -> None:
         """Check which TTS method is available: daemon API first, then Piper, then espeak fallback."""
         if self._tts_checked:
             return
         
         self._tts_checked = True
+        
+        # Detect audio device for robot speaker
+        self._detect_audio_device()
         
         # Try daemon API endpoints (common patterns)
         daemon_endpoints = [
@@ -1457,8 +1550,16 @@ class ReachyDaemonREST(RobotAdapter):
                 # pyaudio not available, try aplay fallback
                 logger.debug("pyaudio not available, trying aplay fallback")
                 audio_stream.seek(0)
+                # Use detected audio device if available
+                audio_device = self._detect_audio_device()
+                aplay_cmd = ['aplay', '-q']
+                if audio_device:
+                    aplay_cmd.extend(['-D', audio_device])
+                    logger.info(f"🔊 Routing audio to device: {audio_device}")
+                else:
+                    logger.info("🔊 Using system default audio device")
                 aplay_proc = subprocess.Popen(
-                    ['aplay', '-q'],
+                    aplay_cmd,
                     stdin=audio_stream,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL
@@ -1491,7 +1592,179 @@ class ReachyDaemonREST(RobotAdapter):
             aplay_proc = None
             try:
                 espeak_cmd = ['espeak', '-s', '175', '-a', '150', '--stdout', cleaned_text]
-                aplay_cmd = ['aplay', '-q']
+                # Use detected audio device if available
+                audio_device = self._detect_audio_device()
+                
+                # Use paplay for PulseAudio devices, aplay for ALSA devices
+                if audio_device and audio_device.startswith('pulse:'):
+                    # PulseAudio device - use paplay with sink name or index
+                    sink_id = audio_device.split(':', 1)[1]
+                    aplay_cmd = ['paplay', '--device', sink_id]
+                    logger.info(f"🔊 Routing audio to PulseAudio sink: {sink_id}")
+                elif audio_device and audio_device.startswith('hw:'):
+                    # ALSA device - find PulseAudio card and create/use its sink
+                    card_num = audio_device.split(':')[1].split(',')[0]
+                    
+                    # Find the PulseAudio card for this ALSA card
+                    card_name = None
+                    try:
+                        cards_result = subprocess.run(
+                            ['pactl', 'list', 'cards', 'short'],
+                            capture_output=True,
+                            text=True,
+                            timeout=1.0
+                        )
+                        if cards_result.returncode == 0:
+                            for line in cards_result.stdout.split('\n'):
+                                if line.strip() and f'card{card_num}' in line.lower() or 'reachy' in line.lower():
+                                    parts = line.split('\t')
+                                    if len(parts) >= 2:
+                                        card_name = parts[1]  # e.g., "alsa_card.usb-Pollen_Robotics_Reachy_Mini_Audio..."
+                                        break
+                    except Exception:
+                        pass
+                    
+                    if card_name:
+                        # Step 1: Enable the card profile to create a sink
+                        try:
+                            subprocess.run(
+                                ['pactl', 'set-card-profile', card_name, 'output:analog-stereo'],
+                                capture_output=True,
+                                timeout=1.0
+                            )
+                            time.sleep(1.5)  # Give PipeWire time to create sink
+                        except Exception:
+                            pass
+                        
+                        # Step 2: Try to create sink manually if it doesn't exist
+                        sink_found = None
+                        try:
+                            # First, try to find existing sink
+                            sinks_result = subprocess.run(
+                                ['pactl', 'list', 'sinks', 'short'],
+                                capture_output=True,
+                                text=True,
+                                timeout=1.0
+                            )
+                            if sinks_result.returncode == 0:
+                                # Look for Reachy/Pollen sinks
+                                for line in sinks_result.stdout.split('\n'):
+                                    if line.strip() and ('pollen' in line.lower() or 'reachy' in line.lower()):
+                                        parts = line.split('\t')
+                                        if len(parts) >= 2:
+                                            sink_found = parts[1]
+                                            logger.info(f"✓ Found existing PulseAudio sink: {sink_found}")
+                                            break
+                        except Exception:
+                            pass
+                        
+                        # Step 3: If no sink found, try to create one manually
+                        if not sink_found:
+                            try:
+                                # Try to load ALSA sink module for this device
+                                module_result = subprocess.run(
+                                    ['pactl', 'load-module', 'module-alsa-sink', 
+                                     f'device=hw:{card_num},0', 'sink_name=reachy_mini_sink'],
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=2.0
+                                )
+                                if module_result.returncode == 0:
+                                    time.sleep(1.0)
+                                    # Check if sink was created
+                                    sinks_result = subprocess.run(
+                                        ['pactl', 'list', 'sinks', 'short'],
+                                        capture_output=True,
+                                        text=True,
+                                        timeout=1.0
+                                    )
+                                    if sinks_result.returncode == 0:
+                                        for line in sinks_result.stdout.split('\n'):
+                                            if 'reachy_mini_sink' in line.lower():
+                                                parts = line.split('\t')
+                                                if len(parts) >= 2:
+                                                    sink_found = parts[1]
+                                                    logger.info(f"✓ Created PulseAudio sink: {sink_found}")
+                                                    break
+                            except Exception:
+                                pass
+                        
+                        # Step 4: Use the sink if found - set as default temporarily
+                        if sink_found:
+                            # Store current default to restore later
+                            current_default_sink = None
+                            try:
+                                current_default_sink = subprocess.run(
+                                    ['pactl', 'get-default-sink'],
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=0.5
+                                ).stdout.strip()
+                            except Exception:
+                                pass
+                            
+                            # Set Reachy sink as default temporarily
+                            try:
+                                subprocess.run(
+                                    ['pactl', 'set-default-sink', sink_found],
+                                    capture_output=True,
+                                    timeout=0.5
+                                )
+                                logger.info(f"🔊 Set Reachy Mini as default sink: {sink_found}")
+                            except Exception as e:
+                                logger.warning(f"⚠ Could not set default sink: {e}")
+                            
+                            # Use paplay without --device (uses default sink)
+                            aplay_cmd = ['paplay']
+                            logger.info(f"🔊 Audio will play on default sink: {sink_found}")
+                            
+                            # Store for restoration after playback
+                            self._previous_default_sink = current_default_sink
+                            self._reachy_sink_name = sink_found
+                        else:
+                            # Fallback: try to find any sink matching the card name pattern
+                            try:
+                                sinks_result = subprocess.run(
+                                    ['pactl', 'list', 'sinks', 'short'],
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=1.0
+                                )
+                                if sinks_result.returncode == 0:
+                                    # Look for sinks with card name pattern
+                                    card_id = card_name.split('.')[-1].split('-')[0]  # Extract unique ID
+                                    for line in sinks_result.stdout.split('\n'):
+                                        if card_id in line or card_name.split('.')[1] in line:
+                                            parts = line.split('\t')
+                                            if len(parts) >= 2:
+                                                sink_found = parts[1]
+                                                logger.info(f"✓ Found PulseAudio sink by card ID: {sink_found}")
+                                                break
+                                
+                                if sink_found:
+                                    aplay_cmd = ['paplay', '--device', sink_found]
+                                    logger.info(f"🔊 Routing audio to PulseAudio sink: {sink_found}")
+                                else:
+                                    # Final fallback
+                                    logger.warning(f"⚠ Could not find/create PulseAudio sink. Audio will use system default.")
+                                    logger.warning(f"⚠ To fix: Run: pactl set-card-profile {card_name} output:analog-stereo")
+                                    aplay_cmd = ['paplay']  # Use default sink
+                            except Exception:
+                                aplay_cmd = ['paplay']  # Use default sink
+                                logger.warning(f"⚠ Using default PulseAudio sink")
+                    else:
+                        # Card not found in PulseAudio, use plughw
+                        plug_device = audio_device.replace('hw:', 'plughw:')
+                        aplay_cmd = ['aplay', '-q', '-D', plug_device]
+                        logger.info(f"🔊 Routing audio via plughw: {plug_device}")
+                else:
+                    # Default or no device specified
+                    aplay_cmd = ['aplay', '-q']
+                    if audio_device:
+                        aplay_cmd.extend(['-D', audio_device])
+                        logger.info(f"🔊 Routing audio to ALSA device: {audio_device}")
+                    else:
+                        logger.info("🔊 Using system default audio device")
                 
                 espeak_proc = subprocess.Popen(
                     espeak_cmd,
@@ -1502,7 +1775,7 @@ class ReachyDaemonREST(RobotAdapter):
                     aplay_cmd,
                     stdin=espeak_proc.stdout,
                     stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
+                    stderr=subprocess.PIPE  # Capture errors to check if device fails
                 )
                 espeak_proc.stdout.close()
                 
@@ -1512,12 +1785,43 @@ class ReachyDaemonREST(RobotAdapter):
                 espeak_proc.wait(timeout=30)
                 aplay_proc.wait(timeout=30)
                 
+                # Check for aplay errors
+                aplay_stderr = aplay_proc.stderr.read().decode('utf-8', errors='ignore') if aplay_proc.stderr else ''
+                
                 duration = time.time() - start_time
                 if espeak_proc.returncode == 0 and aplay_proc.returncode == 0:
                     logger.debug(f"✓ Espeak TTS completed in {duration:.2f}s")
                     self._current_tts_processes.clear()
                     return duration
                 else:
+                    # Log the error
+                    if aplay_proc.returncode != 0:
+                        error_msg = aplay_stderr.strip() if aplay_stderr else "Unknown error"
+                        logger.warning(f"⚠ aplay failed (return code {aplay_proc.returncode}): {error_msg}")
+                        
+                        # If device is busy, try falling back to default device
+                        if 'busy' in error_msg.lower() or 'device or resource busy' in error_msg.lower():
+                            logger.warning(f"⚠ Audio device {audio_device} is busy, trying system default...")
+                            # Retry with default device
+                            aplay_cmd_default = ['aplay', '-q']
+                            espeak_proc_retry = subprocess.Popen(
+                                espeak_cmd,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL
+                            )
+                            aplay_proc_retry = subprocess.Popen(
+                                aplay_cmd_default,
+                                stdin=espeak_proc_retry.stdout,
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL
+                            )
+                            espeak_proc_retry.stdout.close()
+                            espeak_proc_retry.wait(timeout=30)
+                            aplay_proc_retry.wait(timeout=30)
+                            if espeak_proc_retry.returncode == 0 and aplay_proc_retry.returncode == 0:
+                                logger.warning(f"⚠ Audio played on system default device (robot device was busy)")
+                                return max(0.5, len(text) * 0.08)
+                    
                     # Kill processes if they failed
                     self._kill_tts_processes()
             except (FileNotFoundError, subprocess.TimeoutExpired) as e:

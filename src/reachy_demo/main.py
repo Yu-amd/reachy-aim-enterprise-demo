@@ -23,7 +23,7 @@ console = Console()
 def _make_robot(settings: Settings):
     if settings.robot_mode.lower() == "sim":
         return SimRobot(settings.reachy_daemon_url)
-    return ReachyDaemonREST(settings.reachy_daemon_url)
+    return ReachyDaemonREST(settings.reachy_daemon_url, audio_device=settings.audio_device)
 
 @app.command()
 def run(

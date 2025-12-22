@@ -55,6 +55,9 @@ class Settings:
     e2e_slo_ms: int = 2500
     metrics_host: str = "127.0.0.1"
     metrics_port: int = 9100
+    
+    # Audio device for TTS (None = auto-detect, or specify ALSA device like "hw:1,0")
+    audio_device: str | None = None
 
 def load_settings() -> Settings:
     base = _env("AIM_BASE_URL")
@@ -73,4 +76,5 @@ def load_settings() -> Settings:
         e2e_slo_ms=_env_int("E2E_SLO_MS", 2500),
         metrics_host=_env("EDGE_METRICS_HOST", "127.0.0.1") or "127.0.0.1",
         metrics_port=_env_int("EDGE_METRICS_PORT", 9100),
+        audio_device=_env("AUDIO_DEVICE", None),
     )
